@@ -714,10 +714,16 @@ extern "C" void ODESolvers_Solve(CCTK_ARGUMENTS) {
         assert(rhs_gi != groupdata.groupindex);
         auto &rhs_groupdata = *leveldata.groupdata.at(rhs_gi);
         assert(rhs_groupdata.numvars == groupdata.numvars);
+        if (CarpetX::vartype_is_real4(groupdata.vartype) ||
+            CarpetX::vartype_is_real4(rhs_groupdata.vartype))
+          CCTK_VERROR("ODESolvers is not yet supported for CCTK_REAL4 grid "
+                     "function group %s",
+                     groupdata.groupname.c_str());
         var.groupdatas.push_back(&groupdata);
-        var.mfabs.push_back(groupdata.mfab.at(tl).get());
+        var.mfabs.push_back(&CarpetX::as_mfab_real(*groupdata.mfab.at(tl)));
         rhs.groupdatas.push_back(&rhs_groupdata);
-        rhs.mfabs.push_back(rhs_groupdata.mfab.at(tl).get());
+        rhs.mfabs.push_back(
+            &CarpetX::as_mfab_real(*rhs_groupdata.mfab.at(tl)));
         if (do_accumulate_nvars) {
           nvars += groupdata.numvars;
           var_groups.push_back(groupdata.groupindex);
