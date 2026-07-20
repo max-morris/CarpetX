@@ -1,0 +1,7 @@
+# Main make.code.defn file for thorn TestReal4
+
+# Source files in this directory
+SRCS = testreal4.cxx testreal4_gf3d5.cxx
+
+# Subdirectories containing source files
+SUBDIRS =

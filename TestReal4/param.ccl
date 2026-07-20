@@ -1,0 +1,5 @@
+# Parameter definitions for thorn TestReal4
+#
+# No steerable parameters are needed: the analytic test function and its
+# tolerances are fixed in the source code so that the test is fully
+# self-contained.

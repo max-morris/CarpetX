@@ -1,0 +1,25 @@
+# Schedule definitions for thorn TestReal4
+
+STORAGE: state8
+STORAGE: state4
+
+SCHEDULE TestReal4_Initialize AT initial
+{
+  LANG: C
+  WRITES: state4(interior)
+  WRITES: state8(interior)
+  SYNC: state4 state8
+} "Initialize REAL4 and REAL8 test states with a periodic analytic function"
+
+SCHEDULE TestReal4_Check AT poststep
+{
+  LANG: C
+  READS: state4(everywhere)
+  READS: state8(everywhere)
+} "Check REAL4 and REAL8 test states everywhere (interior and ghosts), using the GF3D2 accessor family"
+
+SCHEDULE TestReal4_CheckGF3D5 AT poststep AFTER TestReal4_Check
+{
+  LANG: C
+  READS: state4(everywhere)
+} "Re-check the REAL4 test state everywhere, using the GF3D5 accessor family"

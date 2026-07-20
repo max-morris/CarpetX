@@ -1,0 +1,25 @@
+# Interface definition for thorn TestReal4
+#
+# Self-checking mixed-precision test: one CCTK_REAL8 grid function and one
+# CCTK_REAL4 grid function, both on the same (default) centering. Both are
+# filled with a deterministic, periodic analytic function of the
+# coordinates, synced, and then verified everywhere (interior and ghost
+# zones) to make sure single-level ghost exchange works correctly for a
+# CCTK_REAL4 grid function alongside a CCTK_REAL8 one.
+
+IMPLEMENTS: TestReal4
+
+USES INCLUDE HEADER: loop.hxx
+USES INCLUDE HEADER: loop_device.hxx
+
+PRIVATE:
+
+CCTK_REAL8 state8 TYPE=gf
+{
+  u8
+} "REAL8 (double) mixed-precision test state"
+
+CCTK_REAL4 state4 TYPE=gf
+{
+  u4
+} "REAL4 (float) mixed-precision test state"
