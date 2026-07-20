@@ -1587,7 +1587,8 @@ public:
   constexpr Arith::vect<int, Loop::dim> L##_centered V;                        \
   const Loop::GF3D5layout cctk_layout_##L(cctkGH, L##_centered)
 #define CCTK_CENTERING_GF(C, L, N)                                             \
-  const Loop::GF3D5<C CCTK_REAL> N(cctk_layout_##L, cctk_ptr_##N)
+  const Loop::GF3D5<std::remove_reference_t<decltype(*cctk_ptr_##N)> > N(      \
+      cctk_layout_##L, cctk_ptr_##N)
 
 #else
 
@@ -1595,7 +1596,8 @@ public:
   constexpr Arith::vect<int, Loop::dim> L##_centered V;                        \
   const Loop::GF3D2layout cctk_layout_##L(cctkGH, L##_centered)
 #define CCTK_CENTERING_GF(C, L, N)                                             \
-  const Loop::GF3D2<C CCTK_REAL> N(cctk_layout_##L, cctk_ptr_##N)
+  const Loop::GF3D2<std::remove_reference_t<decltype(*cctk_ptr_##N)> > N(      \
+      cctk_layout_##L, cctk_ptr_##N)
 
 #endif
 
