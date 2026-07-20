@@ -25,6 +25,7 @@
 #include <memory>
 #include <ostream>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace CarpetX {
@@ -106,6 +107,44 @@ public:
                            const amrex::DistributionMapping &dm) override;
   virtual void ClearLevel(int level) override;
 };
+
+// Storage for a grid function group's data, at the precision (CCTK_REAL or
+// CCTK_REAL4) determined by the group's `vartype`
+using AnyMultiFab = std::variant<amrex::MultiFab, amrex::fMultiFab>;
+
+// Storage precision of a Cactus real vartype: REAL and REAL8 are double
+// (CCTK_REAL_PRECISION==8 is asserted above), REAL4 is float. CCTK_REAL16 is
+// not supported.
+inline bool vartype_is_real4(const int vartype) {
+  return vartype == CCTK_VARIABLE_REAL4;
+}
+inline bool vartype_is_real8(const int vartype) {
+  return vartype == CCTK_VARIABLE_REAL || vartype == CCTK_VARIABLE_REAL8;
+}
+inline bool vartype_is_supported_real(const int vartype) {
+  return vartype_is_real4(vartype) || vartype_is_real8(vartype);
+}
+
+inline bool is_real4(const AnyMultiFab &mfab) {
+  return std::holds_alternative<amrex::fMultiFab>(mfab);
+}
+
+inline amrex::MultiFab &as_mfab_real(AnyMultiFab &mfab) {
+  return std::get<amrex::MultiFab>(mfab);
+}
+inline const amrex::MultiFab &as_mfab_real(const AnyMultiFab &mfab) {
+  return std::get<amrex::MultiFab>(mfab);
+}
+
+template <typename... Args>
+std::unique_ptr<AnyMultiFab> make_any_mfab(const int vartype, Args &&...args) {
+  assert(vartype_is_supported_real(vartype));
+  if (vartype_is_real4(vartype))
+    return std::make_unique<AnyMultiFab>(
+        std::in_place_type<amrex::fMultiFab>, std::forward<Args>(args)...);
+  return std::make_unique<AnyMultiFab>(std::in_place_type<amrex::MultiFab>,
+                                       std::forward<Args>(args)...);
+}
 
 // Cactus grid hierarchy extension
 struct GHExt {
@@ -396,6 +435,8 @@ struct GHExt {
 
         int patch, level;
 
+        int vartype;
+
         std::array<int, dim> indextype;
         std::array<int, dim> nghostzones;
 
@@ -411,10 +452,12 @@ struct GHExt {
         // Apply outer (physical) boundary conditions to a MultiFab
         void apply_boundary_conditions(amrex::MultiFab &mfab) const;
 
-        // each amrex::MultiFab has numvars components
-        std::vector<std::unique_ptr<amrex::MultiFab> > mfab; // [time level]
+        // each amrex::MultiFab (or amrex::fMultiFab, for CCTK_REAL4
+        // groups) has numvars components
+        std::vector<std::unique_ptr<AnyMultiFab> > mfab; // [time level]
 
         // flux register between this and the next coarser level
+        // (REAL groups only; CCTK_REAL4 groups cannot have flux registers)
         std::unique_ptr<amrex::FluxRegister> freg;
         // associated flux group indices
         std::array<int, dim> fluxes; // [dir]
@@ -428,7 +471,7 @@ struct GHExt {
         // changes). This is used e.g. by ODESolvers for its
         // temporaries.
       private:
-        mutable std::vector<std::unique_ptr<amrex::MultiFab> > tmp_mfabs;
+        mutable std::vector<std::unique_ptr<AnyMultiFab> > tmp_mfabs;
         mutable std::size_t next_tmp_mfab;
 
       public:

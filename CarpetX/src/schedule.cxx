@@ -678,10 +678,14 @@ void enter_local_mode(cGH *restrict cctkGH,
     auto &restrict groupdata = *leveldata.groupdata.at(gi);
     const GridPtrDesc1 grid1(leveldata, groupdata, mfp);
     for (int tl = 0; tl < int(groupdata.mfab.size()); ++tl) {
-      const amrex::Array4<CCTK_REAL> vars =
-          groupdata.mfab.at(tl)->array(mfp.index());
-      for (int vi = 0; vi < groupdata.numvars; ++vi)
-        cctkGH->data[groupdata.firstvarindex + vi][tl] = grid1.ptr(vars, vi);
+      std::visit(
+          [&](auto &mf) {
+            const auto vars = mf.array(mfp.index());
+            for (int vi = 0; vi < groupdata.numvars; ++vi)
+              cctkGH->data[groupdata.firstvarindex + vi][tl] =
+                  grid1.ptr(vars, vi);
+          },
+          *groupdata.mfab.at(tl));
     }
   }
 
@@ -2499,16 +2503,33 @@ int SyncGroupsByDirI(const cGH *restrict cctkGH, int numgroups,
         // Copy from adjacent boxes on same level
 
         for (int tl = 0; tl < sync_tl; ++tl) {
-          tasks1.submit_serially([&tasks2, &leveldata, &groupdata, tl]() {
-            FillPatch_Sync(tasks2, groupdata, *groupdata.mfab.at(tl),
-                           ghext->patchdata.at(leveldata.patch)
-                               .amrcore->Geom(leveldata.level));
-          });
+          if (vartype_is_real4(groupdata.vartype)) {
+            tasks1.submit_serially([&leveldata, &groupdata, tl]() {
+              const amrex::Geometry &geom =
+                  ghext->patchdata.at(leveldata.patch)
+                      .amrcore->Geom(leveldata.level);
+              std::visit(
+                  [&](auto &mf) { mf.FillBoundary(geom.periodicity()); },
+                  *groupdata.mfab.at(tl));
+            });
+          } else {
+            tasks1.submit_serially([&tasks2, &leveldata, &groupdata, tl]() {
+              FillPatch_Sync(tasks2, groupdata,
+                            as_mfab_real(*groupdata.mfab.at(tl)),
+                            ghext->patchdata.at(leveldata.patch)
+                                .amrcore->Geom(leveldata.level));
+            });
+          }
         } // for tl
 
       } else { // if leveldata.level > 0
         // Copy from adjacent boxes on same level, and interpolate
         // from next coarser level
+
+        if (vartype_is_real4(groupdata.vartype))
+          CCTK_VERROR("Ghost sync across levels is not yet supported for "
+                     "CCTK_REAL4 grid function group %s",
+                     groupdata.groupname.c_str());
 
         const int level = leveldata.level;
         const auto &restrict coarseleveldata =
@@ -2522,14 +2543,15 @@ int SyncGroupsByDirI(const cGH *restrict cctkGH, int numgroups,
 
           tasks1.submit_serially([&tasks2, &tasks3, &leveldata, &groupdata,
                                   &coarsegroupdata, interpolator, tl]() {
-            FillPatch_ProlongateGhosts(tasks2, tasks3, groupdata,
-                                       coarsegroupdata, *groupdata.mfab.at(tl),
-                                       *coarsegroupdata.mfab.at(tl),
-                                       ghext->patchdata.at(leveldata.patch)
-                                           .amrcore->Geom(leveldata.level),
-                                       ghext->patchdata.at(leveldata.patch)
-                                           .amrcore->Geom(leveldata.level - 1),
-                                       interpolator, groupdata.bcrecs);
+            FillPatch_ProlongateGhosts(
+                tasks2, tasks3, groupdata, coarsegroupdata,
+                as_mfab_real(*groupdata.mfab.at(tl)),
+                as_mfab_real(*coarsegroupdata.mfab.at(tl)),
+                ghext->patchdata.at(leveldata.patch)
+                    .amrcore->Geom(leveldata.level),
+                ghext->patchdata.at(leveldata.patch)
+                    .amrcore->Geom(leveldata.level - 1),
+                interpolator, groupdata.bcrecs);
           });
 
         } // for tl
@@ -2694,14 +2716,15 @@ void Reflux(const cGH *cctkGH, int level) {
             const auto &flux_finegroupdata =
                 *fineleveldata.groupdata.at(flux_gi);
             const auto &flux_groupdata = *leveldata.groupdata.at(flux_gi);
-            finegroupdata.freg->CrseInit(*flux_groupdata.mfab.at(tl), d, 0, 0,
-                                         flux_groupdata.numvars, -1);
-            finegroupdata.freg->FineAdd(*flux_finegroupdata.mfab.at(tl), d, 0,
-                                        0, flux_finegroupdata.numvars, 1);
+            finegroupdata.freg->CrseInit(as_mfab_real(*flux_groupdata.mfab.at(tl)),
+                                         d, 0, 0, flux_groupdata.numvars, -1);
+            finegroupdata.freg->FineAdd(
+                as_mfab_real(*flux_finegroupdata.mfab.at(tl)), d, 0, 0,
+                flux_finegroupdata.numvars, 1);
           }
           const amrex::Geometry &geom = patchdata.amrcore->Geom(level);
-          finegroupdata.freg->Reflux(*groupdata.mfab.at(tl), 1.0, 0, 0,
-                                     groupdata.numvars, geom);
+          finegroupdata.freg->Reflux(as_mfab_real(*groupdata.mfab.at(tl)), 1.0,
+                                     0, 0, groupdata.numvars, geom);
 
           const active_levels_t active_levels(level, level + 1);
           for (int vi = 0; vi < finegroupdata.numvars; ++vi)
@@ -2758,6 +2781,11 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
         if (!groupdata.do_restrict)
           continue;
 
+        if (vartype_is_real4(groupdata.vartype))
+          CCTK_VERROR("Restriction is not yet supported for CCTK_REAL4 grid "
+                     "function group %s",
+                     groupdata.groupname.c_str());
+
         // If there is more than one time level, then we don't restrict the
         // oldest.
         // TODO: during evolution, restrict only one time level
@@ -2796,20 +2824,21 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
               rank += groupdata.indextype.at(d);
             switch (rank) {
             case 0:
-              average_down_nodal(*finegroupdata.mfab.at(tl),
-                                 *groupdata.mfab.at(tl), reffact);
+              average_down_nodal(as_mfab_real(*finegroupdata.mfab.at(tl)),
+                                 as_mfab_real(*groupdata.mfab.at(tl)), reffact);
               break;
             case 1:
-              average_down_edges(*finegroupdata.mfab.at(tl),
-                                 *groupdata.mfab.at(tl), reffact);
+              average_down_edges(as_mfab_real(*finegroupdata.mfab.at(tl)),
+                                 as_mfab_real(*groupdata.mfab.at(tl)), reffact);
               break;
             case 2:
-              average_down_faces(*finegroupdata.mfab.at(tl),
-                                 *groupdata.mfab.at(tl), reffact);
+              average_down_faces(as_mfab_real(*finegroupdata.mfab.at(tl)),
+                                 as_mfab_real(*groupdata.mfab.at(tl)), reffact);
               break;
             case 3:
-              average_down(*finegroupdata.mfab.at(tl), *groupdata.mfab.at(tl),
-                           0, groupdata.numvars, reffact);
+              average_down(as_mfab_real(*finegroupdata.mfab.at(tl)),
+                           as_mfab_real(*groupdata.mfab.at(tl)), 0,
+                           groupdata.numvars, reffact);
               break;
             default:
               assert(0);

@@ -839,9 +839,11 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
   assert(!ierr);
 
   assert(group.grouptype == CCTK_GF);
-  assert(group.vartype == CCTK_VARIABLE_REAL);
+  assert(vartype_is_supported_real(group.vartype));
   assert(group.disttype == CCTK_DISTRIB_DEFAULT);
   assert(group.dim == dim);
+
+  vartype = group.vartype;
 
   groupname = CCTK_FullGroupName(gi);
   groupindex = gi;
@@ -909,8 +911,8 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
   mfab.resize(group.numtimelevels);
   valid.resize(group.numtimelevels);
   for (int tl = 0; tl < int(mfab.size()); ++tl) {
-    mfab.at(tl) = std::make_unique<amrex::MultiFab>(
-        gba, dm, numvars, amrex::IntVect(nghostzones));
+    mfab.at(tl) = make_any_mfab(vartype, gba, dm, numvars,
+                                amrex::IntVect(nghostzones));
     valid.at(tl).resize(numvars, why_valid_t(why));
   }
 
@@ -918,6 +920,10 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
     fluxes = get_group_fluxes(groupindex);
     const bool have_fluxes = fluxes[0] >= 0;
     if (have_fluxes) {
+      if (vartype_is_real4(vartype))
+        CCTK_VERROR("Flux registers are not yet supported for CCTK_REAL4 "
+                   "grid function group %s",
+                   groupname.c_str());
       assert((indextype == std::array<int, dim>{1, 1, 1}));
       freg = std::make_unique<amrex::FluxRegister>(
           gba, dm, ghext->patchdata.at(patch).amrcore->refRatio(level - 1),
@@ -936,14 +942,18 @@ void GHExt::PatchData::LevelData::GroupData::init_tmp_mfabs() const {
 
 amrex::MultiFab *
 GHExt::PatchData::LevelData::GroupData::alloc_tmp_mfab() const {
+  if (vartype_is_real4(vartype))
+    CCTK_VERROR("Temporary grid function storage is not yet supported for "
+               "CCTK_REAL4 grid function group %s",
+               groupname.c_str());
   assert(next_tmp_mfab <= tmp_mfabs.size());
   if (next_tmp_mfab == tmp_mfabs.size()) {
-    const auto &mfab0 = *mfab.at(0);
-    tmp_mfabs.emplace_back(std::make_unique<amrex::MultiFab>(
-        mfab0.boxArray(), mfab0.DistributionMap(), mfab0.nComp(),
-        mfab0.nGrowVect()));
+    const auto &mfab0 = as_mfab_real(*mfab.at(0));
+    tmp_mfabs.emplace_back(make_any_mfab(vartype, mfab0.boxArray(),
+                                         mfab0.DistributionMap(),
+                                         mfab0.nComp(), mfab0.nGrowVect()));
   }
-  return tmp_mfabs.at(next_tmp_mfab++).get();
+  return &as_mfab_real(*tmp_mfabs.at(next_tmp_mfab++));
 }
 
 void GHExt::PatchData::LevelData::GroupData::free_tmp_mfabs() const {
@@ -1053,7 +1063,7 @@ void CactusAmrCore::ErrorEst(const int level, amrex::TagBoxArray &tags,
     GridPtrDesc1 grid(leveldata, groupdata, mfi);
 
     const amrex::Array4<const CCTK_REAL> &err_array4 =
-        groupdata.mfab.at(tl)->array(mfi);
+        as_mfab_real(*groupdata.mfab.at(tl)).array(mfi);
     const GF3D1<const CCTK_REAL> &err_ = grid.gf3d(err_array4, vi);
     const amrex::Array4<char> &tags_array4 = tags.array(mfi);
 
@@ -1276,6 +1286,10 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
     auto &restrict groupdata = *leveldata.groupdata.at(gi);
     auto &restrict coarsegroupdata = *coarseleveldata.groupdata.at(gi);
     assert(coarsegroupdata.numvars == groupdata.numvars);
+    if (vartype_is_real4(groupdata.vartype))
+      CCTK_VERROR("Prolongation to a new level is not yet supported for "
+                 "CCTK_REAL4 grid function group %s",
+                 groupdata.groupname.c_str());
     amrex::Interpolater *const interpolator = groupdata.interpolator;
 
     const int ntls = groupdata.mfab.size();
@@ -1307,10 +1321,12 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
             return "MakeNewLevelFromCoarse before prolongation";
           });
         }
-        FillPatch_NewLevel(
-            groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
-            *coarsegroupdata.mfab.at(tl), patchdata.amrcore->Geom(level - 1),
-            patchdata.amrcore->Geom(level), interpolator, groupdata.bcrecs);
+        FillPatch_NewLevel(groupdata, coarsegroupdata,
+                          as_mfab_real(*groupdata.mfab.at(tl)),
+                          as_mfab_real(*coarsegroupdata.mfab.at(tl)),
+                          patchdata.amrcore->Geom(level - 1),
+                          patchdata.amrcore->Geom(level), interpolator,
+                          groupdata.bcrecs);
         const auto outer_valid =
             groupdata.all_faces_have_symmetries_or_boundaries()
                 ? make_valid_outer()
@@ -1433,6 +1449,10 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
     auto &restrict oldgroupdata = *oldleveldata.groupdata.at(gi);
     auto &restrict coarsegroupdata = *coarseleveldata.groupdata.at(gi);
     assert(coarsegroupdata.numvars == groupdata.numvars);
+    if (vartype_is_real4(groupdata.vartype))
+      CCTK_VERROR("Regridding is not yet supported for CCTK_REAL4 grid "
+                 "function group %s",
+                 groupdata.groupname.c_str());
     amrex::Interpolater *const interpolator = groupdata.interpolator;
 
     const auto outer_valid = groupdata.all_faces_have_symmetries_or_boundaries()
@@ -1454,8 +1474,9 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
       if (tl < prolongate_tl) {
         // Copy from same level and/or prolongate from next coarser level
         FillPatch_RemakeLevel(
-            groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
-            *coarsegroupdata.mfab.at(tl), *oldgroupdata.mfab.at(tl),
+            groupdata, coarsegroupdata, as_mfab_real(*groupdata.mfab.at(tl)),
+            as_mfab_real(*coarsegroupdata.mfab.at(tl)),
+            as_mfab_real(*oldgroupdata.mfab.at(tl)),
             patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
             interpolator, groupdata.bcrecs);
 
