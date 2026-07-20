@@ -542,10 +542,14 @@ void InputSilo(const cGH *restrict const cctkGH,
             CCTK_VINFO("  Reading group %s", CCTK_FullGroupName(gi));
 
           auto &groupdata = *leveldata.groupdata.at(gi);
+          if (vartype_is_real4(groupdata.vartype))
+            CCTK_VERROR("SILO input is not yet supported for CCTK_REAL4 "
+                       "grid function group %s",
+                       groupdata.groupname.c_str());
           // TODO: Check that group has the default number of ghost zones
           const int numvars = groupdata.numvars;
           const int tl = 0;
-          amrex::MultiFab &mfab = *groupdata.mfab[tl];
+          amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
           const amrex::IndexType &indextype = mfab.ixType();
           const amrex::DistributionMapping &dm = mfab.DistributionMap();
 
@@ -710,6 +714,28 @@ void OutputSilo(const cGH *restrict const cctkGH,
   if (io_verbose)
     CCTK_VINFO("OutputSilo...");
 
+  // CCTK_REAL4 grid function groups are not yet supported by SILO output.
+  // Warn once per group and drop them from the set of groups to be output,
+  // so that CCTK_REAL groups continue to be written normally.
+  std::vector<bool> filtered_output_group = output_group;
+  for (int gi = 0; gi < int(filtered_output_group.size()); ++gi) {
+    if (!filtered_output_group.at(gi))
+      continue;
+    if (CCTK_GroupTypeI(gi) != CCTK_GF)
+      continue;
+    const auto &groupdata0 =
+        *ghext->patchdata.at(0).leveldata.at(0).groupdata.at(gi);
+    if (vartype_is_real4(groupdata0.vartype)) {
+      static std::set<int> warned_groups;
+      if (warned_groups.insert(gi).second)
+        CCTK_VWARN(CCTK_WARN_ALERT,
+                  "SILO output is not yet supported for CCTK_REAL4 grid "
+                  "function group %s, skipping",
+                  groupdata0.groupname.c_str());
+      filtered_output_group.at(gi) = false;
+    }
+  }
+
   static Timer timer_setup("OutputSilo.setup");
   auto interval_setup = std::make_unique<Interval>(timer_setup);
 
@@ -836,7 +862,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
         // Loop over groups
         std::set<mesh_props_t> have_meshes;
         for (int gi = 0; gi < CCTK_NumGroups(); ++gi) {
-          if (!output_group.at(gi))
+          if (!filtered_output_group.at(gi))
             continue;
           // TODO: Output grid arrays
           if (CCTK_GroupTypeI(gi) != CCTK_GF)
@@ -846,7 +872,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
           // TODO: Check that group has the default number of ghost zones
           const int numvars = groupdata.numvars;
           const int tl = 0;
-          const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+          const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
           const amrex::IndexType &indextype = mfab.ixType();
           const amrex::DistributionMapping &dm = mfab.DistributionMap();
 
@@ -911,8 +937,8 @@ void OutputSilo(const cGH *restrict const cctkGH,
                 assert(send_this_fab && write_this_fab);
                 assert(leveldata.groupdata.at(coordinate_group)->nghostzones ==
                        groupdata.nghostzones);
-                const auto &coord_mfab =
-                    *leveldata.groupdata.at(coordinate_group)->mfab.at(0);
+                const auto &coord_mfab = as_mfab_real(
+                    *leveldata.groupdata.at(coordinate_group)->mfab.at(0));
                 const auto &coord_fabbox = coord_mfab[component];
                 for (int d = 0; d < ndims; ++d) {
                   coord_ptrs[d] = coord_fabbox.dataPtr(d);
@@ -1161,7 +1187,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
     // Loop over groups
     std::set<mesh_props_t> have_meshes;
     for (int gi = 0; gi < CCTK_NumGroups(); ++gi) {
-      if (!output_group.at(gi))
+      if (!filtered_output_group.at(gi))
         continue;
       // TODO: Output grid arrays
       if (CCTK_GroupTypeI(gi) != CCTK_GF)
@@ -1172,7 +1198,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
       const auto &groupdata0 = *leveldata0.groupdata.at(gi);
       const int numvars = groupdata0.numvars;
       const int tl = 0;
-      const amrex::MultiFab &mfab0 = *groupdata0.mfab[tl];
+      const amrex::MultiFab &mfab0 = as_mfab_real(*groupdata0.mfab[tl]);
       const amrex::IndexType &indextype = mfab0.ixType();
 
       const std::array<int, dim> &nghosts = groupdata0.nghostzones;
@@ -1263,10 +1289,10 @@ void OutputSilo(const cGH *restrict const cctkGH,
               const int fine_level = level + 1;
               if (fine_level < int(patchdata.leveldata.size())) {
                 const auto &groupdata = *leveldata.groupdata.at(gi);
-                const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+                const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
                 const auto &fine_leveldata = patchdata.leveldata.at(fine_level);
                 const auto &fine_groupdata = *fine_leveldata.groupdata.at(gi);
-                const amrex::MultiFab &fine_mfab = *fine_groupdata.mfab[tl];
+                const amrex::MultiFab &fine_mfab = as_mfab_real(*fine_groupdata.mfab[tl]);
 
                 const int ncomps = ncomps_level_patch.at(level).at(patch);
                 const int fine_comp0 =
@@ -1469,7 +1495,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
           for (const auto &leveldata : patchdata.leveldata) {
             const auto &groupdata = *leveldata.groupdata.at(gi);
             const int tl = 0;
-            const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+            const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
             const int ncomponents = mfab.size();
             if (patchdata.is_cartesian) {
               const amrex::Geometry &geom =
@@ -1589,7 +1615,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
         for (const auto &patchdata : ghext->patchdata) {
           for (const auto &leveldata : patchdata.leveldata) {
             const auto &groupdata = *leveldata.groupdata.at(gi);
-            const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+            const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
             const amrex::DistributionMapping &dm = mfab.DistributionMap();
             const int ncomponents = dm.size();
             for (int c = 0; c < ncomponents; ++c) {
@@ -1658,7 +1684,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
           for (const auto &leveldata : patchdata.leveldata) {
             const auto &groupdata = *leveldata.groupdata.at(gi);
             const int tl = 0;
-            const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+            const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
             const int ncomponents = mfab.size();
             for (int c = 0; c < ncomponents; ++c) {
               const amrex::Box &fabbox = mfab.fabbox(c); // exterior
@@ -1727,7 +1753,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
             for (const auto &leveldata : patchdata.leveldata) {
               const auto &groupdata = *leveldata.groupdata.at(gi);
               const int tl = 0;
-              const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+              const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
               const amrex::DistributionMapping &dm = mfab.DistributionMap();
               const int ncomponents = dm.size();
               for (int c = 0; c < ncomponents; ++c) {
@@ -1822,7 +1848,7 @@ void OutputSilo(const cGH *restrict const cctkGH,
       ofd.description = "3D CarpetX HDF5 Silo output";
       ofd.writer_thorn = CCTK_THORNSTRING;
       for (int gi = 0; gi < CCTK_NumGroups(); ++gi) {
-        if (!output_group.at(gi))
+        if (!filtered_output_group.at(gi))
           continue;
         if (CCTK_GroupTypeI(gi) != CCTK_GF)
           continue;

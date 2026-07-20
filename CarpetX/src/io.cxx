@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <regex>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -304,6 +305,15 @@ void OutputPlotfile(const cGH *restrict cctkGH) {
     auto &restrict groupdata0 =
         *ghext->patchdata.at(0).leveldata.at(0).groupdata.at(gi);
     if (groupdata0.mfab.size() > 0) {
+      if (vartype_is_real4(groupdata0.vartype)) {
+        static std::set<int> warned_groups;
+        if (warned_groups.insert(gi).second)
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                    "Plotfile output is not yet supported for CCTK_REAL4 "
+                    "grid function group %s, skipping",
+                    groupdata0.groupname.c_str());
+        continue;
+      }
       const int tl = 0;
 
       std::string groupname = CCTK_FullGroupName(gi);
@@ -338,7 +348,8 @@ void OutputPlotfile(const cGH *restrict cctkGH) {
         amrex::Vector<int> iters(patchdata.leveldata.size());
         amrex::Vector<amrex::IntVect> reffacts(patchdata.leveldata.size());
         for (const auto &restrict leveldata : patchdata.leveldata) {
-          mfabs.at(leveldata.level) = &*leveldata.groupdata.at(gi)->mfab.at(tl);
+          mfabs.at(leveldata.level) =
+              &as_mfab_real(*leveldata.groupdata.at(gi)->mfab.at(tl));
           geoms.at(leveldata.level) = patchdata.amrcore->Geom(leveldata.level);
           iters.at(leveldata.level) = cctk_iteration;
           reffacts.at(leveldata.level) = amrex::IntVect{2, 2, 2};

@@ -50,6 +50,7 @@ static inline int omp_in_parallel() { return 0; }
 #include <mutex>
 #include <optional>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -868,7 +869,11 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
           assert(!ierr);
           if (cgroup.grouptype != CCTK_GF)
             continue;
-          assert(cgroup.vartype == CCTK_VARIABLE_REAL);
+          if (vartype_is_real4(cgroup.vartype))
+            CCTK_VERROR("openPMD input is not yet supported for CCTK_REAL4 "
+                       "grid function group %s",
+                       CCTK_FullGroupName(gi));
+          assert(vartype_is_real8(cgroup.vartype));
           assert(cgroup.dim == 3);
           // cGroupDynamicData cgroupdynamicdata;
           // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -883,7 +888,7 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
           // const int firstvarindex = groupdata.firstvarindex;
           const int numvars = groupdata.numvars;
           const int tl = 0;
-          amrex::MultiFab &mfab = *groupdata.mfab[tl];
+          amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
           const amrex::IndexType &indextype = mfab.ixType();
           const Arith::vect<bool, 3> is_cell_centred{indextype.cellCentered(0),
                                                      indextype.cellCentered(1),
@@ -1552,7 +1557,16 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
           assert(!ierr);
           if (cgroup.grouptype != CCTK_GF)
             continue;
-          assert(cgroup.vartype == CCTK_VARIABLE_REAL);
+          if (vartype_is_real4(cgroup.vartype)) {
+            static std::set<int> warned_groups;
+            if (warned_groups.insert(gi).second)
+              CCTK_VWARN(CCTK_WARN_ALERT,
+                        "openPMD output is not yet supported for CCTK_REAL4 "
+                        "grid function group %s, skipping",
+                        CCTK_FullGroupName(gi));
+            continue;
+          }
+          assert(vartype_is_real8(cgroup.vartype));
           assert(cgroup.dim == 3);
           // cGroupDynamicData cgroupdynamicdata;
           // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -1567,7 +1581,7 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
           // const int firstvarindex = groupdata.firstvarindex;
           const int numvars = groupdata.numvars;
           const int tl = 0;
-          const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+          const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
           const amrex::IndexType &indextype = mfab.ixType();
           const Arith::vect<bool, 3> is_cell_centred{indextype.cellCentered(0),
                                                      indextype.cellCentered(1),

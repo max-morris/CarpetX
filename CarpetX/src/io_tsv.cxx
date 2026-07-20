@@ -149,7 +149,7 @@ void WriteTSVold(const cGH *restrict cctkGH, const std::string &filename,
       const auto &groupdata = *leveldata.groupdata.at(gi);
       const int tl = 0;
       const auto &geom = patchdata.amrcore->Geom(leveldata.level);
-      const auto &mfab = *groupdata.mfab.at(tl);
+      const auto &mfab = as_mfab_real(*groupdata.mfab.at(tl));
       for (amrex::MFIter mfi(mfab); mfi.isValid(); ++mfi) {
         const amrex::Array4<const CCTK_REAL> &vars = mfab.array(mfi);
         const auto &imin = vars.begin;
@@ -205,6 +205,15 @@ void OutputTSVold(const cGH *restrict cctkGH) {
     auto &restrict groupdata0 =
         *ghext->patchdata.at(0).leveldata.at(0).groupdata.at(gi);
     if (groupdata0.mfab.size() > 0) {
+      if (vartype_is_real4(groupdata0.vartype)) {
+        static std::set<int> warned_groups;
+        if (warned_groups.insert(gi).second)
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                    "TSV output is not yet supported for CCTK_REAL4 grid "
+                    "function group %s, skipping",
+                    groupdata0.groupname.c_str());
+        continue;
+      }
       const int tl = 0;
 
       std::string groupname = CCTK_FullGroupName(gi);
@@ -455,6 +464,15 @@ void WriteTSVGFs(const cGH *restrict cctkGH, const std::string &filename,
                  const bool output_boundary_points) {
   const auto &groupdata0 =
       *ghext->patchdata.at(0).leveldata.at(0).groupdata.at(gi);
+  if (vartype_is_real4(groupdata0.vartype)) {
+    static std::set<int> warned_groups;
+    if (warned_groups.insert(gi).second)
+      CCTK_VWARN(CCTK_WARN_ALERT,
+                "TSV output is not yet supported for CCTK_REAL4 grid "
+                "function group %s, skipping",
+                groupdata0.groupname.c_str());
+    return;
+  }
 
   // Number of values transmitted per grid point
   const int nintvalues = 1                  // patch
@@ -496,7 +514,7 @@ void WriteTSVGFs(const cGH *restrict cctkGH, const std::string &filename,
 
       const auto &symmetries = ghext->patchdata.at(leveldata.patch).symmetries;
 
-      const auto &mfab = *groupdata.mfab.at(tl);
+      const auto &mfab = as_mfab_real(*groupdata.mfab.at(tl));
 
       const vect<int, dim> nghosts = {mfab.nGrow(0), mfab.nGrow(1),
                                       mfab.nGrow(2)};

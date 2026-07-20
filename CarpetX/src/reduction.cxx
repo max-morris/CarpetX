@@ -162,13 +162,17 @@ reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
   int ierr = CCTK_GroupData(gi, &group);
   assert(!ierr);
   assert(group.grouptype == CCTK_GF);
+  if (vartype_is_real4(group.vartype))
+    CCTK_VERROR("Reductions are not yet supported for CCTK_REAL4 grid "
+               "function group %s",
+               CCTK_FullGroupName(gi));
 
   reduction<CCTK_REAL, dim> red;
   // TODO: Parallelize over patches and levels
   for (auto &restrict patchdata : ghext->patchdata) {
     for (auto &restrict leveldata : patchdata.leveldata) {
       const auto &restrict groupdata = *leveldata.groupdata.at(gi);
-      const amrex::MultiFab &mfab = *groupdata.mfab.at(tl);
+      const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab.at(tl));
       std::unique_ptr<amrex::iMultiFab> finemask_imfab;
 
       warn_if_invalid(groupdata, vi, tl, make_valid_int(),
@@ -188,7 +192,8 @@ reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
         const auto &restrict fine_leveldata =
             patchdata.leveldata.at(fine_level);
         const auto &restrict fine_groupdata = *fine_leveldata.groupdata.at(gi);
-        const amrex::MultiFab &fine_mfab = *fine_groupdata.mfab.at(tl);
+        const amrex::MultiFab &fine_mfab =
+            as_mfab_real(*fine_groupdata.mfab.at(tl));
 
         const amrex::IntVect reffact{2, 2, 2};
 

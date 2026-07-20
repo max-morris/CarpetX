@@ -714,12 +714,16 @@ void CarpetX::InterpolationSetup::Interpolate(
           const int gi = givis.at(v).gi;
           const int vi = givis.at(v).vi;
           const auto &restrict groupdata = *leveldata.groupdata.at(gi);
+          if (vartype_is_real4(groupdata.vartype))
+            CCTK_VERROR("Interpolation is not yet supported for CCTK_REAL4 "
+                       "grid function group %s",
+                       groupdata.groupname.c_str());
           const int centering = groupdata.indextype[0] * 0b100 +
                                 groupdata.indextype[1] * 0b010 +
                                 groupdata.indextype[2] * 0b001;
           assert(all(groupdata.nghostzones == grid.nghostzones));
           const amrex::Array4<const CCTK_REAL> &vars =
-              groupdata.mfab.at(tl)->array(pti);
+              as_mfab_real(*groupdata.mfab.at(tl)).array(pti);
           vect<int, dim> derivs;
           int op = operations[v];
           while (op > 0) {

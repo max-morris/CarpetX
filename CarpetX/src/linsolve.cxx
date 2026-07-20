@@ -72,12 +72,18 @@ extern "C" void CarpetX_SolvePoisson(const CCTK_INT gi_sol,
   for (int level = 0; level < int(patchdata.leveldata.size()); ++level) {
     const auto &restrict leveldata = patchdata.leveldata.at(level);
     const auto &restrict groupdata_rhs = *leveldata.groupdata.at(gi_rhs);
-    rhss.at(level) = groupdata_rhs.mfab.at(tl).get();
     const auto &restrict groupdata_sol = *leveldata.groupdata.at(gi_sol);
-    sols.at(level) = groupdata_sol.mfab.at(tl).get();
+    if (vartype_is_real4(groupdata_rhs.vartype) ||
+        vartype_is_real4(groupdata_sol.vartype) ||
+        (have_res &&
+         vartype_is_real4(leveldata.groupdata.at(gi_res)->vartype)))
+      CCTK_VERROR("The Poisson solver is not yet supported for CCTK_REAL4 "
+                 "grid function groups");
+    rhss.at(level) = &as_mfab_real(*groupdata_rhs.mfab.at(tl));
+    sols.at(level) = &as_mfab_real(*groupdata_sol.mfab.at(tl));
     if (have_res) {
       const auto &restrict groupdata_res = *leveldata.groupdata.at(gi_res);
-      ress.at(level) = groupdata_res.mfab.at(tl).get();
+      ress.at(level) = &as_mfab_real(*groupdata_res.mfab.at(tl));
     }
   }
 

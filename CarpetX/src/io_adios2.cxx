@@ -41,6 +41,7 @@ static inline int omp_in_parallel() { return 0; }
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -204,6 +205,27 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
   if (io_verbose)
     CCTK_VINFO("OutputADIOS2...");
 
+  // CCTK_REAL4 grid function groups are not yet supported by ADIOS2 output.
+  // Warn once per group and drop them from the set of groups to be output,
+  // so that CCTK_REAL groups continue to be written normally.
+  std::vector<bool> filtered_output_group = output_group;
+  for (int gi = 0; gi < int(filtered_output_group.size()); ++gi) {
+    if (!filtered_output_group.at(gi))
+      continue;
+    cGroup cgroup;
+    const int ierr = CCTK_GroupData(gi, &cgroup);
+    assert(!ierr);
+    if (cgroup.grouptype == CCTK_GF && vartype_is_real4(cgroup.vartype)) {
+      static std::set<int> warned_groups;
+      if (warned_groups.insert(gi).second)
+        CCTK_VWARN(CCTK_WARN_ALERT,
+                  "ADIOS2 output is not yet supported for CCTK_REAL4 grid "
+                  "function group %s, skipping",
+                  CCTK_FullGroupName(gi));
+      filtered_output_group.at(gi) = false;
+    }
+  }
+
   try {
 
     // const MPI_Comm mpi_comm = MPI_COMM_WORLD;
@@ -275,13 +297,13 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
 
           const int numgroups = CCTK_NumGroups();
           for (int gi = 0; gi < numgroups; ++gi) {
-            if (output_group.at(gi)) {
+            if (filtered_output_group.at(gi)) {
 
               cGroup cgroup;
               ierr = CCTK_GroupData(gi, &cgroup);
               assert(!ierr);
               assert(cgroup.grouptype == CCTK_GF);
-              assert(cgroup.vartype == CCTK_VARIABLE_REAL);
+              assert(vartype_is_real8(cgroup.vartype));
               assert(cgroup.dim == 3);
               // cGroupDynamicData cgroupdynamicdata;
               // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -294,7 +316,7 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
               const int numvars = groupdata.numvars;
 
               const int tl = 0;
-              const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+              const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
               const int num_local_components = mfab.local_size();
 
               // Loop over variables
@@ -359,7 +381,7 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
 
         const int numgroups = CCTK_NumGroups();
         for (int gi = 0; gi < numgroups; ++gi) {
-          if (output_group.at(gi)) {
+          if (filtered_output_group.at(gi)) {
             if (io_verbose)
               CCTK_VINFO("    Writing group %s...", CCTK_FullGroupName(gi));
 
@@ -367,7 +389,7 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
             ierr = CCTK_GroupData(gi, &cgroup);
             assert(!ierr);
             assert(cgroup.grouptype == CCTK_GF);
-            assert(cgroup.vartype == CCTK_VARIABLE_REAL);
+            assert(vartype_is_real8(cgroup.vartype));
             assert(cgroup.dim == 3);
             // cGroupDynamicData cgroupdynamicdata;
             // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -379,7 +401,7 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
             // const int firstvarindex = groupdata.firstvarindex;
             const int numvars = groupdata.numvars;
             const int tl = 0;
-            const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+            const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
             const amrex::IndexType &indextype = mfab.ixType();
             // const amrex::IntVect &ngrow = mfab.nGrowVect();
             // const amrex::DistributionMapping &dm = mfab.DistributionMap();

@@ -254,6 +254,18 @@ template <> struct ipoison_t<CCTK_REAL> {
   static_assert(sizeof value == sizeof(CCTK_REAL));
 };
 
+// CCTK_REAL4 is always `float`, independent of which CCTK_REAL_PRECISION_*
+// is selected for CCTK_REAL. CarpetX requires CCTK_REAL_PRECISION_8 (see
+// the static_assert next to amrex::Real in driver.hxx), so CCTK_REAL4 is
+// always distinct from CCTK_REAL and this specialization never collides
+// with the one above.
+#if !defined CCTK_REAL_PRECISION_4
+template <> struct ipoison_t<CCTK_REAL4> {
+  const std::uint32_t value[1] = {0xffc00000UL + 0xdead};
+  static_assert(sizeof value == sizeof(CCTK_REAL4));
+};
+#endif
+
 template <> struct ipoison_t<CCTK_INT> {
   const std::uint32_t value[1] = {0xdeadbeef};
   static_assert(sizeof value == sizeof(CCTK_INT));
