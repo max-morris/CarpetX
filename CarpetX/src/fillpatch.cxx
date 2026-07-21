@@ -28,9 +28,53 @@ using namespace amrex::detail;
 // Coroutines were popularized in the "Modula" language in the 1980s.
 // Welcome to the future, C++, you're only 40 years behind.
 
+// Precision-generic replacement for amrex::detail::FillPatchInterp's
+// duck-typed template<MF, Interp> overload (AMReX_FillPatchUtil_I.H,
+// `FillPatchInterp(MF& mf_fine_patch, ..., Interp* mapper, ...)`), taking an
+// InterpolaterT<T>* mapper (T = MF::value_type) instead of an
+// amrex::Interpolater*/MFInterpolater*. CarpetX cannot call AMReX's own
+// overload here: that overload's InterpBase* runtime-dispatch fallback only
+// ever downcasts to amrex::Interpolater or amrex::MFInterpolater, neither of
+// which InterpolaterT<CCTK_REAL4> is or could be (it operates on
+// amrex::BaseFab<float>, which amrex::Interpolater's FArrayBox-typed
+// interface cannot represent) -- so for CCTK_REAL4 groups AMReX's
+// FillPatchInterp would have no matching overload at all. This function
+// replicates the exact loop structure and semantics of that AMReX overload
+// (including the amrex::setBC() call establishing per-call boundary types)
+// for both precisions.
+template <typename MF>
+static void
+fill_patch_interp(MF &mf_fine_patch, int fcomp, const MF &mf_crse_patch,
+                  int ccomp, int ncomp, const IntVect &ng,
+                  const Geometry &cgeom, const Geometry &fgeom,
+                  const Box &dest_domain, const IntVect &ratio,
+                  InterpolaterT<typename MF::value_type> *const mapper,
+                  const Vector<BCRec> &bcs, int bcscomp) {
+  const Box &cdomain = amrex::convert(cgeom.Domain(), mf_fine_patch.ixType());
+  const int idummy = 0;
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (Gpu::notInLaunchRegion())
+#endif
+  {
+    Vector<BCRec> bcr(ncomp);
+    for (MFIter mfi(mf_fine_patch); mfi.isValid(); ++mfi) {
+      const auto &sfab = mf_crse_patch[mfi];
+      const Box &sbx = sfab.box();
+
+      auto &dfab = mf_fine_patch[mfi];
+      const Box &dbx = amrex::grow(mfi.validbox(), ng) & dest_domain;
+
+      amrex::setBC(sbx, cdomain, bcscomp, 0, ncomp, bcs, bcr);
+      mapper->interp(sfab, ccomp, dfab, fcomp, ncomp, dbx, ratio, cgeom, fgeom,
+                     bcr, idummy, idummy, RunOn::Gpu);
+    }
+  }
+}
+
+template <typename MF>
 void FillPatch_Sync(task_manager &tasks2,
                     const GHExt::PatchData::LevelData::GroupData &groupdata,
-                    MultiFab &mfab, const Geometry &geom) {
+                    MF &mfab, const Geometry &geom) {
   mfab.FillBoundary_nowait(0, mfab.nComp(), mfab.nGrowVect(),
                            geom.periodicity());
   tasks2.submit_serially([&groupdata, &mfab]() {
@@ -39,12 +83,13 @@ void FillPatch_Sync(task_manager &tasks2,
   });
 }
 
+template <typename MF>
 void FillPatch_ProlongateGhosts(
     task_manager &tasks2, task_manager &tasks3,
     const GHExt::PatchData::LevelData::GroupData &groupdata,
-    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata,
-    MultiFab &mfab, const MultiFab &cmfab, const Geometry &fgeom,
-    const Geometry &cgeom, Interpolater *const mapper,
+    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata, MF &mfab,
+    const MF &cmfab, const Geometry &fgeom, const Geometry &cgeom,
+    InterpolaterT<typename MF::value_type> *const mapper,
     const Vector<BCRec> &bcrecs) {
   const IntVect &nghosts = mfab.nGrowVect();
   if (nghosts.max() == 0)
@@ -82,9 +127,8 @@ void FillPatch_ProlongateGhosts(
   // boundary conditions might require prolongated points).
 
   // Copy parts of coarse grid into temporary buffer
-  MultiFab *const mfab_crse_patch_ptr =
-      new MultiFab(make_mf_crse_patch<MultiFab>(fpc, ncomps));
-  MultiFab &mfab_crse_patch = *mfab_crse_patch_ptr;
+  MF *const mfab_crse_patch_ptr = new MF(make_mf_crse_patch<MF>(fpc, ncomps));
+  MF &mfab_crse_patch = *mfab_crse_patch_ptr;
   mf_set_domain_bndry(mfab_crse_patch, cgeom);
 
   // This is not local
@@ -98,7 +142,7 @@ void FillPatch_ProlongateGhosts(
     const IntVect &nghosts = mfab.nGrowVect();
     const int ncomps = mfab.nComp();
     const IntVect ratio{2, 2, 2};
-    MultiFab &mfab_crse_patch = *mfab_crse_patch_ptr;
+    MF &mfab_crse_patch = *mfab_crse_patch_ptr;
 
     // Finish synchronizing
     mfab.FillBoundary_finish();
@@ -108,15 +152,15 @@ void FillPatch_ProlongateGhosts(
 
     coarsegroupdata.apply_boundary_conditions(mfab_crse_patch);
 
-    MultiFab *const mfab_fine_patch_ptr =
-        new MultiFab(make_mf_fine_patch<MultiFab>(fpc, ncomps));
-    MultiFab &mfab_fine_patch = *mfab_fine_patch_ptr;
+    MF *const mfab_fine_patch_ptr =
+        new MF(make_mf_fine_patch<MF>(fpc, ncomps));
+    MF &mfab_fine_patch = *mfab_fine_patch_ptr;
 
     // Interpolate coarse buffer into fine buffer (in space, local)
-    FillPatchInterp(mfab_fine_patch, 0, mfab_crse_patch, 0, ncomps,
-                    IntVect{0} /* don't add any new ghosts */, cgeom, fgeom,
-                    grow(convert(fgeom.Domain(), mfab.ixType()), nghosts),
-                    ratio, mapper, bcrecs, 0);
+    fill_patch_interp(mfab_fine_patch, 0, mfab_crse_patch, 0, ncomps,
+                      IntVect{0} /* don't add any new ghosts */, cgeom, fgeom,
+                      grow(convert(fgeom.Domain(), mfab.ixType()), nghosts),
+                      ratio, mapper, bcrecs, 0);
 
     // Copy fine buffer into destination
     mfab.ParallelCopy_nowait(
@@ -137,11 +181,12 @@ void FillPatch_ProlongateGhosts(
   });
 }
 
+template <typename MF>
 void FillPatch_NewLevel(
     const GHExt::PatchData::LevelData::GroupData &groupdata,
-    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata,
-    MultiFab &mfab, const MultiFab &cmfab, const Geometry &cgeom,
-    const Geometry &fgeom, Interpolater *const mapper,
+    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata, MF &mfab,
+    const MF &cmfab, const Geometry &cgeom, const Geometry &fgeom,
+    InterpolaterT<typename MF::value_type> *const mapper,
     const Vector<BCRec> &bcrecs) {
   const int ncomps = mfab.nComp();
   const IntVect ratio{2, 2, 2};
@@ -169,24 +214,25 @@ void FillPatch_NewLevel(
     box &= fdomain_g;
     cba_g.set(i, coarsener.doit(box));
   }
-  MultiFab cmfab_g(cba_g, dm, ncomps, 0);
+  MF cmfab_g(cba_g, dm, ncomps, 0);
   mf_set_domain_bndry(cmfab_g, cgeom);
 
   cmfab_g.ParallelCopy(cmfab, 0, 0, ncomps, cgeom.periodicity());
 
   coarsegroupdata.apply_boundary_conditions(cmfab_g);
 
-  FillPatchInterp(mfab, 0, cmfab_g, 0, ncomps, nghosts, cgeom, fgeom, fdomain_g,
-                  ratio, mapper, bcrecs, 0);
+  fill_patch_interp(mfab, 0, cmfab_g, 0, ncomps, nghosts, cgeom, fgeom,
+                    fdomain_g, ratio, mapper, bcrecs, 0);
 
   groupdata.apply_boundary_conditions(mfab);
 }
 
+template <typename MF>
 void FillPatch_RemakeLevel(
     const GHExt::PatchData::LevelData::GroupData &groupdata,
-    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata,
-    MultiFab &mfab, const MultiFab &cmfab, const MultiFab &fmfab,
-    const Geometry &cgeom, const Geometry &fgeom, Interpolater *const mapper,
+    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata, MF &mfab,
+    const MF &cmfab, const MF &fmfab, const Geometry &cgeom,
+    const Geometry &fgeom, InterpolaterT<typename MF::value_type> *const mapper,
     const Vector<BCRec> &bcrecs) {
   const int ncomps = mfab.nComp();
   const IntVect ratio{2, 2, 2};
@@ -199,7 +245,7 @@ void FillPatch_RemakeLevel(
       fmfab, mfab, nghosts, coarsener, fgeom, cgeom, index_space);
 
   if (!fpc.ba_crse_patch.empty()) {
-    MultiFab mfab_crse_patch = make_mf_crse_patch<MultiFab>(fpc, ncomps);
+    MF mfab_crse_patch = make_mf_crse_patch<MF>(fpc, ncomps);
     mf_set_domain_bndry(mfab_crse_patch, cgeom);
 
     mfab_crse_patch.ParallelCopy(
@@ -207,13 +253,13 @@ void FillPatch_RemakeLevel(
         mfab_crse_patch.nGrowVect(), cgeom.periodicity());
     coarsegroupdata.apply_boundary_conditions(mfab_crse_patch);
 
-    MultiFab mfab_fine_patch = make_mf_fine_patch<MultiFab>(fpc, ncomps);
+    MF mfab_fine_patch = make_mf_fine_patch<MF>(fpc, ncomps);
 
     // In space, local
-    FillPatchInterp(mfab_fine_patch, 0, mfab_crse_patch, 0, ncomps,
-                    IntVect{0} /* don't add any new ghosts */, cgeom, fgeom,
-                    grow(convert(fgeom.Domain(), mfab.ixType()), nghosts),
-                    ratio, mapper, bcrecs, 0);
+    fill_patch_interp(mfab_fine_patch, 0, mfab_crse_patch, 0, ncomps,
+                      IntVect{0} /* don't add any new ghosts */, cgeom, fgeom,
+                      grow(convert(fgeom.Domain(), mfab.ixType()), nghosts),
+                      ratio, mapper, bcrecs, 0);
 
     mfab.ParallelCopy_nowait(
         mfab_fine_patch, 0, 0, ncomps,
@@ -225,5 +271,49 @@ void FillPatch_RemakeLevel(
                     nghosts, fgeom.periodicity());
   groupdata.apply_boundary_conditions(mfab);
 }
+
+template void
+FillPatch_Sync<MultiFab>(task_manager &,
+                         const GHExt::PatchData::LevelData::GroupData &,
+                         MultiFab &, const Geometry &);
+template void
+FillPatch_Sync<fMultiFab>(task_manager &,
+                          const GHExt::PatchData::LevelData::GroupData &,
+                          fMultiFab &, const Geometry &);
+
+template void FillPatch_ProlongateGhosts<MultiFab>(
+    task_manager &, task_manager &,
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, MultiFab &,
+    const MultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL> *, const Vector<BCRec> &);
+template void FillPatch_ProlongateGhosts<fMultiFab>(
+    task_manager &, task_manager &,
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, fMultiFab &,
+    const fMultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL4> *, const Vector<BCRec> &);
+
+template void FillPatch_NewLevel<MultiFab>(
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, MultiFab &,
+    const MultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL> *, const Vector<BCRec> &);
+template void FillPatch_NewLevel<fMultiFab>(
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, fMultiFab &,
+    const fMultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL4> *, const Vector<BCRec> &);
+
+template void FillPatch_RemakeLevel<MultiFab>(
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, MultiFab &,
+    const MultiFab &, const MultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL> *, const Vector<BCRec> &);
+template void FillPatch_RemakeLevel<fMultiFab>(
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, fMultiFab &,
+    const fMultiFab &, const fMultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL4> *, const Vector<BCRec> &);
 
 } // namespace CarpetX

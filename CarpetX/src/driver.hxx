@@ -463,8 +463,12 @@ struct GHExt {
         std::vector<CCTK_REAL> robin_values;
         amrex::Vector<amrex::BCRec> bcrecs;
 
-        // Apply outer (physical) boundary conditions to a MultiFab
-        void apply_boundary_conditions(amrex::MultiFab &mfab) const;
+        // Apply outer (physical) boundary conditions to a MultiFab or
+        // fMultiFab, whichever matches this group's precision (i.e. the
+        // AnyMultiFab alternative held in `mfab`/`tmp_mfabs` below).
+        // Explicitly instantiated for amrex::MultiFab and amrex::fMultiFab
+        // in driver.cxx.
+        template <typename MF> void apply_boundary_conditions(MF &mfab) const;
 
         // each amrex::MultiFab (or amrex::fMultiFab, for CCTK_REAL4
         // groups) has numvars components
@@ -490,7 +494,7 @@ struct GHExt {
 
       public:
         void init_tmp_mfabs() const;
-        amrex::MultiFab *alloc_tmp_mfab() const;
+        AnyMultiFab *alloc_tmp_mfab() const;
         void free_tmp_mfabs() const;
 
         friend YAML::Emitter &operator<<(YAML::Emitter &yaml,
@@ -541,6 +545,15 @@ struct GHExt {
 };
 
 extern std::unique_ptr<GHExt> ghext;
+
+// GroupData::apply_boundary_conditions<MF>() is explicitly instantiated for
+// both storage precisions in driver.cxx.
+extern template void
+GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions<
+    amrex::MultiFab>(amrex::MultiFab &mfab) const;
+extern template void
+GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions<
+    amrex::fMultiFab>(amrex::fMultiFab &mfab) const;
 
 // Monotonically increasing counter. Incremented whenever the AMR grid
 // hierarchy is invalidated (regridding, recovery). Starts at 0.

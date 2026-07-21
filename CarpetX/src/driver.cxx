@@ -962,20 +962,18 @@ void GHExt::PatchData::LevelData::GroupData::init_tmp_mfabs() const {
   assert(next_tmp_mfab == 0);
 }
 
-amrex::MultiFab *
-GHExt::PatchData::LevelData::GroupData::alloc_tmp_mfab() const {
-  if (vartype_is_real4(vartype))
-    CCTK_VERROR("Temporary grid function storage is not yet supported for "
-               "CCTK_REAL4 grid function group %s",
-               groupname.c_str());
+AnyMultiFab *GHExt::PatchData::LevelData::GroupData::alloc_tmp_mfab() const {
   assert(next_tmp_mfab <= tmp_mfabs.size());
   if (next_tmp_mfab == tmp_mfabs.size()) {
-    const auto &mfab0 = as_mfab_real(*mfab.at(0));
-    tmp_mfabs.emplace_back(make_any_mfab(vartype, mfab0.boxArray(),
-                                         mfab0.DistributionMap(),
-                                         mfab0.nComp(), mfab0.nGrowVect()));
+    tmp_mfabs.emplace_back(std::visit(
+        [&](const auto &mfab0) {
+          return make_any_mfab(vartype, mfab0.boxArray(),
+                               mfab0.DistributionMap(), mfab0.nComp(),
+                               mfab0.nGrowVect());
+        },
+        *mfab.at(0)));
   }
-  return &as_mfab_real(*tmp_mfabs.at(next_tmp_mfab++));
+  return tmp_mfabs.at(next_tmp_mfab++).get();
 }
 
 void GHExt::PatchData::LevelData::GroupData::free_tmp_mfabs() const {
@@ -996,8 +994,9 @@ bool GHExt::PatchData::LevelData::GroupData::
   return res;
 }
 
+template <typename MF>
 void GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions(
-    amrex::MultiFab &mfab) const {
+    MF &mfab) const {
   DECLARE_CCTK_PARAMETERS;
 
   static Timer timer("apply_boundary_conditions");
@@ -1019,13 +1018,18 @@ void GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions(
   const auto mfitinfo = amrex::MFItInfo().DisableDeviceSync();
 #pragma omp parallel
   for (amrex::MFIter mfi(mfab, mfitinfo); mfi.isValid(); ++mfi) {
-    amrex::FArrayBox &dest = mfab[mfi];
+    typename MF::fab_type &dest = mfab[mfi];
     // If there are cells not in the valid + periodic grown box, then
     // we need to fill them here
     if (!gdomain.contains(dest.box()))
-      BoundaryCondition(*this, dest).apply();
+      BoundaryCondition<typename MF::value_type>(*this, dest).apply();
   }
 }
+
+template void GHExt::PatchData::LevelData::GroupData::
+    apply_boundary_conditions<amrex::MultiFab>(amrex::MultiFab &mfab) const;
+template void GHExt::PatchData::LevelData::GroupData::
+    apply_boundary_conditions<amrex::fMultiFab>(amrex::fMultiFab &mfab) const;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1308,11 +1312,6 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
     auto &restrict groupdata = *leveldata.groupdata.at(gi);
     auto &restrict coarsegroupdata = *coarseleveldata.groupdata.at(gi);
     assert(coarsegroupdata.numvars == groupdata.numvars);
-    if (vartype_is_real4(groupdata.vartype))
-      CCTK_VERROR("Prolongation to a new level is not yet supported for "
-                 "CCTK_REAL4 grid function group %s",
-                 groupdata.groupname.c_str());
-    amrex::Interpolater *const interpolator = groupdata.interpolator;
 
     const int ntls = groupdata.mfab.size();
     // We only prolongate the state vector. And if there is more than
@@ -1343,12 +1342,20 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
             return "MakeNewLevelFromCoarse before prolongation";
           });
         }
-        FillPatch_NewLevel(groupdata, coarsegroupdata,
-                          as_mfab_real(*groupdata.mfab.at(tl)),
-                          as_mfab_real(*coarsegroupdata.mfab.at(tl)),
-                          patchdata.amrcore->Geom(level - 1),
-                          patchdata.amrcore->Geom(level), interpolator,
-                          groupdata.bcrecs);
+        if (is_real4(*groupdata.mfab.at(tl)))
+          FillPatch_NewLevel(
+              groupdata, coarsegroupdata,
+              std::get<amrex::fMultiFab>(*groupdata.mfab.at(tl)),
+              std::get<amrex::fMultiFab>(*coarsegroupdata.mfab.at(tl)),
+              patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
+              groupdata.interpolator_real4, groupdata.bcrecs);
+        else
+          FillPatch_NewLevel(groupdata, coarsegroupdata,
+                            as_mfab_real(*groupdata.mfab.at(tl)),
+                            as_mfab_real(*coarsegroupdata.mfab.at(tl)),
+                            patchdata.amrcore->Geom(level - 1),
+                            patchdata.amrcore->Geom(level),
+                            groupdata.interpolator_real8, groupdata.bcrecs);
         const auto outer_valid =
             groupdata.all_faces_have_symmetries_or_boundaries()
                 ? make_valid_outer()
@@ -1471,11 +1478,6 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
     auto &restrict oldgroupdata = *oldleveldata.groupdata.at(gi);
     auto &restrict coarsegroupdata = *coarseleveldata.groupdata.at(gi);
     assert(coarsegroupdata.numvars == groupdata.numvars);
-    if (vartype_is_real4(groupdata.vartype))
-      CCTK_VERROR("Regridding is not yet supported for CCTK_REAL4 grid "
-                 "function group %s",
-                 groupdata.groupname.c_str());
-    amrex::Interpolater *const interpolator = groupdata.interpolator;
 
     const auto outer_valid = groupdata.all_faces_have_symmetries_or_boundaries()
                                  ? make_valid_outer()
@@ -1495,12 +1497,21 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
     for (int tl = 0; tl < ntls; ++tl) {
       if (tl < prolongate_tl) {
         // Copy from same level and/or prolongate from next coarser level
-        FillPatch_RemakeLevel(
-            groupdata, coarsegroupdata, as_mfab_real(*groupdata.mfab.at(tl)),
-            as_mfab_real(*coarsegroupdata.mfab.at(tl)),
-            as_mfab_real(*oldgroupdata.mfab.at(tl)),
-            patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
-            interpolator, groupdata.bcrecs);
+        if (is_real4(*groupdata.mfab.at(tl)))
+          FillPatch_RemakeLevel(
+              groupdata, coarsegroupdata,
+              std::get<amrex::fMultiFab>(*groupdata.mfab.at(tl)),
+              std::get<amrex::fMultiFab>(*coarsegroupdata.mfab.at(tl)),
+              std::get<amrex::fMultiFab>(*oldgroupdata.mfab.at(tl)),
+              patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
+              groupdata.interpolator_real4, groupdata.bcrecs);
+        else
+          FillPatch_RemakeLevel(
+              groupdata, coarsegroupdata, as_mfab_real(*groupdata.mfab.at(tl)),
+              as_mfab_real(*coarsegroupdata.mfab.at(tl)),
+              as_mfab_real(*oldgroupdata.mfab.at(tl)),
+              patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
+              groupdata.interpolator_real8, groupdata.bcrecs);
 
         for (int vi = 0; vi < groupdata.numvars; ++vi)
           groupdata.valid.at(tl).at(vi) =

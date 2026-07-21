@@ -2503,33 +2503,20 @@ int SyncGroupsByDirI(const cGH *restrict cctkGH, int numgroups,
         // Copy from adjacent boxes on same level
 
         for (int tl = 0; tl < sync_tl; ++tl) {
-          if (vartype_is_real4(groupdata.vartype)) {
-            tasks1.submit_serially([&leveldata, &groupdata, tl]() {
-              const amrex::Geometry &geom =
-                  ghext->patchdata.at(leveldata.patch)
-                      .amrcore->Geom(leveldata.level);
-              std::visit(
-                  [&](auto &mf) { mf.FillBoundary(geom.periodicity()); },
-                  *groupdata.mfab.at(tl));
-            });
-          } else {
-            tasks1.submit_serially([&tasks2, &leveldata, &groupdata, tl]() {
-              FillPatch_Sync(tasks2, groupdata,
-                            as_mfab_real(*groupdata.mfab.at(tl)),
-                            ghext->patchdata.at(leveldata.patch)
-                                .amrcore->Geom(leveldata.level));
-            });
-          }
+          tasks1.submit_serially([&tasks2, &leveldata, &groupdata, tl]() {
+            std::visit(
+                [&](auto &mf) {
+                  FillPatch_Sync(tasks2, groupdata, mf,
+                                ghext->patchdata.at(leveldata.patch)
+                                    .amrcore->Geom(leveldata.level));
+                },
+                *groupdata.mfab.at(tl));
+          });
         } // for tl
 
       } else { // if leveldata.level > 0
         // Copy from adjacent boxes on same level, and interpolate
         // from next coarser level
-
-        if (vartype_is_real4(groupdata.vartype))
-          CCTK_VERROR("Ghost sync across levels is not yet supported for "
-                     "CCTK_REAL4 grid function group %s",
-                     groupdata.groupname.c_str());
 
         const int level = leveldata.level;
         const auto &restrict coarseleveldata =
@@ -2537,21 +2524,29 @@ int SyncGroupsByDirI(const cGH *restrict cctkGH, int numgroups,
         auto &restrict coarsegroupdata = *coarseleveldata.groupdata.at(gi);
         assert(coarsegroupdata.numvars == groupdata.numvars);
 
-        amrex::Interpolater *const interpolator = groupdata.interpolator;
-
         for (int tl = 0; tl < sync_tl; ++tl) {
 
           tasks1.submit_serially([&tasks2, &tasks3, &leveldata, &groupdata,
-                                  &coarsegroupdata, interpolator, tl]() {
-            FillPatch_ProlongateGhosts(
-                tasks2, tasks3, groupdata, coarsegroupdata,
-                as_mfab_real(*groupdata.mfab.at(tl)),
-                as_mfab_real(*coarsegroupdata.mfab.at(tl)),
+                                  &coarsegroupdata, tl]() {
+            const amrex::Geometry &fgeom = ghext->patchdata.at(leveldata.patch)
+                                               .amrcore->Geom(leveldata.level);
+            const amrex::Geometry &cgeom =
                 ghext->patchdata.at(leveldata.patch)
-                    .amrcore->Geom(leveldata.level),
-                ghext->patchdata.at(leveldata.patch)
-                    .amrcore->Geom(leveldata.level - 1),
-                interpolator, groupdata.bcrecs);
+                    .amrcore->Geom(leveldata.level - 1);
+            if (is_real4(*groupdata.mfab.at(tl))) {
+              FillPatch_ProlongateGhosts(
+                  tasks2, tasks3, groupdata, coarsegroupdata,
+                  std::get<amrex::fMultiFab>(*groupdata.mfab.at(tl)),
+                  std::get<amrex::fMultiFab>(*coarsegroupdata.mfab.at(tl)),
+                  fgeom, cgeom, groupdata.interpolator_real4,
+                  groupdata.bcrecs);
+            } else {
+              FillPatch_ProlongateGhosts(
+                  tasks2, tasks3, groupdata, coarsegroupdata,
+                  as_mfab_real(*groupdata.mfab.at(tl)),
+                  as_mfab_real(*coarsegroupdata.mfab.at(tl)), fgeom, cgeom,
+                  groupdata.interpolator_real8, groupdata.bcrecs);
+            }
           });
 
         } // for tl
@@ -2781,11 +2776,6 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
         if (!groupdata.do_restrict)
           continue;
 
-        if (vartype_is_real4(groupdata.vartype))
-          CCTK_VERROR("Restriction is not yet supported for CCTK_REAL4 grid "
-                     "function group %s",
-                     groupdata.groupname.c_str());
-
         // If there is more than one time level, then we don't restrict the
         // oldest.
         // TODO: during evolution, restrict only one time level
@@ -2822,26 +2812,57 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
             int rank = 0;
             for (int d = 0; d < dim; ++d)
               rank += groupdata.indextype.at(d);
-            switch (rank) {
-            case 0:
-              average_down_nodal(as_mfab_real(*finegroupdata.mfab.at(tl)),
-                                 as_mfab_real(*groupdata.mfab.at(tl)), reffact);
-              break;
-            case 1:
-              average_down_edges(as_mfab_real(*finegroupdata.mfab.at(tl)),
-                                 as_mfab_real(*groupdata.mfab.at(tl)), reffact);
-              break;
-            case 2:
-              average_down_faces(as_mfab_real(*finegroupdata.mfab.at(tl)),
-                                 as_mfab_real(*groupdata.mfab.at(tl)), reffact);
-              break;
-            case 3:
-              average_down(as_mfab_real(*finegroupdata.mfab.at(tl)),
-                           as_mfab_real(*groupdata.mfab.at(tl)), 0,
-                           groupdata.numvars, reffact);
-              break;
-            default:
-              assert(0);
+            if (vartype_is_real4(groupdata.vartype)) {
+              // amrex::average_down_edges (AMReX 25.11) has only a
+              // MultiFab-specific (not FAB-templated) overload, unlike
+              // average_down_nodal/average_down/average_down_faces; there
+              // is no way to restrict edge-centered CCTK_REAL4 data with
+              // AMReX 25.11.
+              if (rank == 1)
+                CCTK_VERROR(
+                    "Edge-centered restriction is not yet supported for "
+                    "CCTK_REAL4 grid function group %s (amrex::"
+                    "average_down_edges is not templated on the FAB type "
+                    "in the installed AMReX version)",
+                    groupdata.groupname.c_str());
+              auto &finemfab =
+                  std::get<amrex::fMultiFab>(*finegroupdata.mfab.at(tl));
+              auto &crsemfab =
+                  std::get<amrex::fMultiFab>(*groupdata.mfab.at(tl));
+              switch (rank) {
+              case 0:
+                average_down_nodal(finemfab, crsemfab, reffact);
+                break;
+              case 2:
+                average_down_faces(finemfab, crsemfab, reffact);
+                break;
+              case 3:
+                average_down(finemfab, crsemfab, 0, groupdata.numvars,
+                            reffact);
+                break;
+              default:
+                assert(0);
+              }
+            } else {
+              auto &finemfab = as_mfab_real(*finegroupdata.mfab.at(tl));
+              auto &crsemfab = as_mfab_real(*groupdata.mfab.at(tl));
+              switch (rank) {
+              case 0:
+                average_down_nodal(finemfab, crsemfab, reffact);
+                break;
+              case 1:
+                average_down_edges(finemfab, crsemfab, reffact);
+                break;
+              case 2:
+                average_down_faces(finemfab, crsemfab, reffact);
+                break;
+              case 3:
+                average_down(finemfab, crsemfab, 0, groupdata.numvars,
+                            reffact);
+                break;
+              default:
+                assert(0);
+              }
             }
           }
 #endif
