@@ -32,6 +32,7 @@ static inline int omp_get_max_threads() { return 1; }
 #include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace ODESolvers {
@@ -80,7 +81,10 @@ struct statecomp_t {
   statecomp_t &operator=(const statecomp_t &) = delete;
 
   std::vector<CarpetX::GHExt::PatchData::LevelData::GroupData *> groupdatas;
-  std::vector<amrex::MultiFab *> mfabs;
+  // One AnyMultiFab per group; a single statecomp_t can mix groups of
+  // different precision (CCTK_REAL vs CCTK_REAL4), each group's data
+  // staying in its own precision throughout.
+  std::vector<CarpetX::AnyMultiFab *> mfabs;
 
   static void init_tmp_mfabs();
   static void free_tmp_mfabs();
@@ -265,7 +269,9 @@ statecomp_t statecomp_t::copy(const CarpetX::valid_t where) const {
     //       CCTK_VERROR("statecomp_t::copy.x: Group %s contains nans",
     //                   groupdata->groupname.c_str());
     // #endif
-    auto y = groupdata->alloc_tmp_mfab();
+    CarpetX::AnyMultiFab *const y = groupdata->alloc_tmp_mfab();
+    assert(CarpetX::is_real4(*y) ==
+           CarpetX::vartype_is_real4(groupdata->vartype));
     result.groupdatas.push_back(groupdata);
     result.mfabs.push_back(y);
   }
@@ -283,6 +289,183 @@ statecomp_t statecomp_t::copy(const CarpetX::valid_t where) const {
   return result;
 }
 
+namespace detail {
+
+// The actual per-group lincomb kernel, templated on the AMReX multifab type
+// (amrex::MultiFab or amrex::fMultiFab). `MF::value_type` is the underlying
+// element type T (CCTK_REAL or CCTK_REAL4). For T = CCTK_REAL this produces
+// bit-identical code to the original (pre-mixed-precision) implementation,
+// since `T(x)` is a no-op when T already is CCTK_REAL: 'scale' and 'factors'
+// remain CCTK_REAL and are only narrowed to T at the point of use.
+template <typename MF, std::size_t N>
+void lincomb_body(const CCTK_REAL scale,
+                  const std::array<CCTK_REAL, N> &factors, MF &dstmfab,
+                  const std::array<const MF *, N> &srcmfabs,
+                  const bool read_dst
+#ifndef AMREX_USE_GPU
+                  ,
+                  std::vector<std::function<void()> > &tasks
+#endif
+) {
+  using T = typename MF::value_type;
+
+  const std::ptrdiff_t ncomps = dstmfab.nComp();
+  const auto mfitinfo = amrex::MFItInfo().DisableDeviceSync();
+  for (amrex::MFIter mfi(dstmfab, mfitinfo); mfi.isValid(); ++mfi) {
+    const amrex::Array4<T> dstvar = dstmfab.array(mfi);
+    std::array<amrex::Array4<const T>, N> srcvars;
+    for (std::size_t n = 0; n < N; ++n)
+      srcvars[n] = srcmfabs[n]->const_array(mfi);
+    for (std::size_t n = 0; n < N; ++n) {
+      assert(srcvars[n].jstride == dstvar.jstride);
+      assert(srcvars[n].kstride == dstvar.kstride);
+      assert(srcvars[n].nstride == dstvar.nstride);
+    }
+    const std::ptrdiff_t nstride = dstvar.nstride;
+    const std::ptrdiff_t npoints = nstride * ncomps;
+
+    T *restrict const dstptr = dstvar.dataPtr();
+    std::array<const T *restrict, N> srcptrs;
+    for (std::size_t n = 0; n < N; ++n)
+      srcptrs[n] = srcvars[n].dataPtr();
+
+#ifndef AMREX_USE_GPU
+    // CPU
+
+    const std::ptrdiff_t ntiles = omp_get_max_threads();
+    const std::ptrdiff_t tile_size = Arith::align_ceil(
+        Arith::div_ceil(npoints, ntiles), std::ptrdiff_t(64));
+
+    for (std::ptrdiff_t imin = 0; imin < npoints; imin += tile_size) {
+      using std::min;
+      const std::ptrdiff_t imax = min(npoints, imin + tile_size);
+
+      if (!read_dst && N == 1 && factors[0] == 1) {
+        // Copy
+
+        auto task = [=]() {
+          std::memcpy(&dstptr[imin], &srcptrs[0][imin],
+                      (imax - imin) * sizeof *dstptr);
+        };
+        tasks.push_back(std::move(task));
+
+      } else if (!read_dst && N >= 1 && factors[0] == 1) {
+        // Write without scaling
+
+        auto task = [=]() {
+#pragma omp simd
+          for (std::ptrdiff_t i = imin; i < imax; ++i) {
+            T accum = srcptrs[0][i];
+            for (std::size_t n = 1; n < N; ++n)
+              accum += T(factors[n]) * srcptrs[n][i];
+            dstptr[i] = accum;
+          }
+        };
+        tasks.push_back(std::move(task));
+
+      } else if (!read_dst) {
+        // Write
+
+        auto task = [=]() {
+#pragma omp simd
+          for (std::ptrdiff_t i = imin; i < imax; ++i) {
+            T accum = 0;
+            for (std::size_t n = 0; n < N; ++n)
+              accum += T(factors[n]) * srcptrs[n][i];
+            dstptr[i] = accum;
+          }
+        };
+        tasks.push_back(std::move(task));
+
+      } else if (scale == 1) {
+        // Update without scaling
+
+        auto task = [=]() {
+#pragma omp simd
+          for (std::ptrdiff_t i = imin; i < imax; ++i) {
+            T accum = dstptr[i];
+            for (std::size_t n = 0; n < N; ++n)
+              accum += T(factors[n]) * srcptrs[n][i];
+            dstptr[i] = accum;
+          }
+        };
+        tasks.push_back(std::move(task));
+
+      } else {
+        // Update
+
+        auto task = [=]() {
+#pragma omp simd
+          for (std::ptrdiff_t i = imin; i < imax; ++i) {
+            T accum = T(scale) * dstptr[i];
+            for (std::size_t n = 0; n < N; ++n)
+              accum += T(factors[n]) * srcptrs[n][i];
+            dstptr[i] = accum;
+          }
+        };
+        tasks.push_back(std::move(task));
+      }
+    } // for imin
+
+#else
+    // GPU
+
+    const T scale1 = T(scale);
+    assert(npoints < INT_MAX);
+    const amrex::Box box(
+        amrex::IntVect(0, 0, 0), amrex::IntVect(npoints - 1, 0, 0),
+        amrex::IntVect(amrex::IndexType::CELL, amrex::IndexType::CELL,
+                       amrex::IndexType::CELL));
+
+    if (!read_dst) {
+
+      amrex::launch(
+          box, [=] CCTK_DEVICE(const amrex::Box &box) __attribute__((
+                   __always_inline__, __flatten__)) {
+            const int i = box.smallEnd()[0];
+            // const int j = box.smallEnd()[1];
+            // const int k = box.smallEnd()[2];
+            T accum = 0;
+            // The ROCM 6.2 compiler can't handle
+            // `std::array::operator[]`, so we avoid it via pointers:
+            // for (std::size_t n = 0; n < N; ++n)
+            //   accum += factors[n] * srcptrs[n][i];
+            const CCTK_REAL *restrict const factors_ptr = factors.data();
+            const T *restrict const *restrict const srcptrs_ptr =
+                srcptrs.data();
+            for (std::size_t n = 0; n < N; ++n)
+              accum += T(factors_ptr[n]) * srcptrs_ptr[n][i];
+            dstptr[i] = accum;
+          });
+
+    } else {
+
+      amrex::launch(
+          box, [=] CCTK_DEVICE(const amrex::Box &box) __attribute__((
+                   __always_inline__, __flatten__)) {
+            const int i = box.smallEnd()[0];
+            // const int j = box.smallEnd()[1];
+            // const int k = box.smallEnd()[2];
+            T accum = scale1 * dstptr[i];
+            // The ROCM 6.2 compiler can't handle
+            // `std::array::operator[]`, so we avoid it via pointers:
+            // for (std::size_t n = 0; n < N; ++n)
+            //   accum += factors[n] * srcptrs[n][i];
+            const CCTK_REAL *restrict const factors_ptr = factors.data();
+            const T *restrict const *restrict const srcptrs_ptr =
+                srcptrs.data();
+            for (std::size_t n = 0; n < N; ++n)
+              accum += T(factors_ptr[n]) * srcptrs_ptr[n][i];
+            dstptr[i] = accum;
+          });
+    }
+
+#endif
+  }
+}
+
+} // namespace detail
+
 template <std::size_t N>
 void statecomp_t::lincomb(const statecomp_t &dst, const CCTK_REAL scale,
                           const std::array<CCTK_REAL, N> &factors,
@@ -291,12 +474,23 @@ void statecomp_t::lincomb(const statecomp_t &dst, const CCTK_REAL scale,
   const std::size_t size = dst.mfabs.size();
   for (std::size_t n = 0; n < N; ++n)
     assert(srcs[n]->mfabs.size() == size);
+  const auto ncomp_of = [](const CarpetX::AnyMultiFab *mfab) {
+    return std::visit([](const auto &mf) { return mf.nComp(); }, *mfab);
+  };
+  const auto ngrowvect_of = [](const CarpetX::AnyMultiFab *mfab) {
+    return std::visit([](const auto &mf) { return mf.nGrowVect(); }, *mfab);
+  };
   for (std::size_t m = 0; m < size; ++m) {
-    const auto ncomp = dst.mfabs.at(m)->nComp();
-    const auto ngrowvect = dst.mfabs.at(m)->nGrowVect();
+    // Every group participating in a lincomb (destination and all sources)
+    // must agree on precision: a group's var/rhs/tmp always share one
+    // precision, they are never mixed within a single group.
+    const bool is_real4 = CarpetX::is_real4(*dst.mfabs.at(m));
+    const auto ncomp = ncomp_of(dst.mfabs.at(m));
+    const auto ngrowvect = ngrowvect_of(dst.mfabs.at(m));
     for (std::size_t n = 0; n < N; ++n) {
-      assert(srcs[n]->mfabs.at(m)->nComp() == ncomp);
-      assert(srcs[n]->mfabs.at(m)->nGrowVect() == ngrowvect);
+      assert(CarpetX::is_real4(*srcs[n]->mfabs.at(m)) == is_real4);
+      assert(ncomp_of(srcs[n]->mfabs.at(m)) == ncomp);
+      assert(ngrowvect_of(srcs[n]->mfabs.at(m)) == ngrowvect);
     }
   }
 
@@ -315,158 +509,28 @@ void statecomp_t::lincomb(const statecomp_t &dst, const CCTK_REAL scale,
   // TODO: Poison ghosts/boundaries
 
   for (std::size_t m = 0; m < size; ++m) {
-    const std::ptrdiff_t ncomps = dst.mfabs.at(m)->nComp();
-    const auto mfitinfo = amrex::MFItInfo().DisableDeviceSync();
-    for (amrex::MFIter mfi(*dst.mfabs.at(m), mfitinfo); mfi.isValid(); ++mfi) {
-      const amrex::Array4<CCTK_REAL> dstvar = dst.mfabs.at(m)->array(mfi);
-      std::array<amrex::Array4<const CCTK_REAL>, N> srcvars;
+    if (CarpetX::is_real4(*dst.mfabs.at(m))) {
+      amrex::fMultiFab &dstmfab = std::get<amrex::fMultiFab>(*dst.mfabs.at(m));
+      std::array<const amrex::fMultiFab *, N> srcmfabs;
       for (std::size_t n = 0; n < N; ++n)
-        srcvars[n] = srcs[n]->mfabs.at(m)->const_array(mfi);
-      for (std::size_t n = 0; n < N; ++n) {
-        assert(srcvars[n].jstride == dstvar.jstride);
-        assert(srcvars[n].kstride == dstvar.kstride);
-        assert(srcvars[n].nstride == dstvar.nstride);
-      }
-      const std::ptrdiff_t nstride = dstvar.nstride;
-      const std::ptrdiff_t npoints = nstride * ncomps;
-
-      CCTK_REAL *restrict const dstptr = dstvar.dataPtr();
-      std::array<const CCTK_REAL *restrict, N> srcptrs;
-      for (std::size_t n = 0; n < N; ++n)
-        srcptrs[n] = srcvars[n].dataPtr();
-
+        srcmfabs[n] = &std::get<amrex::fMultiFab>(*srcs[n]->mfabs.at(m));
+      detail::lincomb_body(scale, factors, dstmfab, srcmfabs, read_dst
 #ifndef AMREX_USE_GPU
-      // CPU
-
-      const std::ptrdiff_t ntiles = omp_get_max_threads();
-      const std::ptrdiff_t tile_size = Arith::align_ceil(
-          Arith::div_ceil(npoints, ntiles), std::ptrdiff_t(64));
-
-      for (std::ptrdiff_t imin = 0; imin < npoints; imin += tile_size) {
-        using std::min;
-        const std::ptrdiff_t imax = min(npoints, imin + tile_size);
-
-        if (!read_dst && N == 1 && factors[0] == 1) {
-          // Copy
-
-          auto task = [=]() {
-            std::memcpy(&dstptr[imin], &srcptrs[0][imin],
-                        (imax - imin) * sizeof *dstptr);
-          };
-          tasks.push_back(std::move(task));
-
-        } else if (!read_dst && N >= 1 && factors[0] == 1) {
-          // Write without scaling
-
-          auto task = [=]() {
-#pragma omp simd
-            for (std::ptrdiff_t i = imin; i < imax; ++i) {
-              CCTK_REAL accum = srcptrs[0][i];
-              for (std::size_t n = 1; n < N; ++n)
-                accum += factors[n] * srcptrs[n][i];
-              dstptr[i] = accum;
-            }
-          };
-          tasks.push_back(std::move(task));
-
-        } else if (!read_dst) {
-          // Write
-
-          auto task = [=]() {
-#pragma omp simd
-            for (std::ptrdiff_t i = imin; i < imax; ++i) {
-              CCTK_REAL accum = 0;
-              for (std::size_t n = 0; n < N; ++n)
-                accum += factors[n] * srcptrs[n][i];
-              dstptr[i] = accum;
-            }
-          };
-          tasks.push_back(std::move(task));
-
-        } else if (scale == 1) {
-          // Update without scaling
-
-          auto task = [=]() {
-#pragma omp simd
-            for (std::ptrdiff_t i = imin; i < imax; ++i) {
-              CCTK_REAL accum = dstptr[i];
-              for (std::size_t n = 0; n < N; ++n)
-                accum += factors[n] * srcptrs[n][i];
-              dstptr[i] = accum;
-            }
-          };
-          tasks.push_back(std::move(task));
-
-        } else {
-          // Update
-
-          auto task = [=]() {
-#pragma omp simd
-            for (std::ptrdiff_t i = imin; i < imax; ++i) {
-              CCTK_REAL accum = scale * dstptr[i];
-              for (std::size_t n = 0; n < N; ++n)
-                accum += factors[n] * srcptrs[n][i];
-              dstptr[i] = accum;
-            }
-          };
-          tasks.push_back(std::move(task));
-        }
-      } // for imin
-
-#else
-      // GPU
-
-      const CCTK_REAL scale1 = scale;
-      assert(npoints < INT_MAX);
-      const amrex::Box box(
-          amrex::IntVect(0, 0, 0), amrex::IntVect(npoints - 1, 0, 0),
-          amrex::IntVect(amrex::IndexType::CELL, amrex::IndexType::CELL,
-                         amrex::IndexType::CELL));
-
-      if (!read_dst) {
-
-        amrex::launch(
-            box, [=] CCTK_DEVICE(const amrex::Box &box) __attribute__((
-                     __always_inline__, __flatten__)) {
-              const int i = box.smallEnd()[0];
-              // const int j = box.smallEnd()[1];
-              // const int k = box.smallEnd()[2];
-              CCTK_REAL accum = 0;
-              // The ROCM 6.2 compiler can't handle
-              // `std::array::operator[]`, so we avoid it via pointers:
-              // for (std::size_t n = 0; n < N; ++n)
-              //   accum += factors[n] * srcptrs[n][i];
-              const CCTK_REAL *restrict const factors_ptr = factors.data();
-              const CCTK_REAL *restrict const *restrict const srcptrs_ptr =
-                  srcptrs.data();
-              for (std::size_t n = 0; n < N; ++n)
-                accum += factors_ptr[n] * srcptrs_ptr[n][i];
-              dstptr[i] = accum;
-            });
-
-      } else {
-
-        amrex::launch(
-            box, [=] CCTK_DEVICE(const amrex::Box &box) __attribute__((
-                     __always_inline__, __flatten__)) {
-              const int i = box.smallEnd()[0];
-              // const int j = box.smallEnd()[1];
-              // const int k = box.smallEnd()[2];
-              CCTK_REAL accum = scale1 * dstptr[i];
-              // The ROCM 6.2 compiler can't handle
-              // `std::array::operator[]`, so we avoid it via pointers:
-              // for (std::size_t n = 0; n < N; ++n)
-              //   accum += factors[n] * srcptrs[n][i];
-              const CCTK_REAL *restrict const factors_ptr = factors.data();
-              const CCTK_REAL *restrict const *restrict const srcptrs_ptr =
-                  srcptrs.data();
-              for (std::size_t n = 0; n < N; ++n)
-                accum += factors_ptr[n] * srcptrs_ptr[n][i];
-              dstptr[i] = accum;
-            });
-      }
-
+                           ,
+                           tasks
 #endif
+      );
+    } else {
+      amrex::MultiFab &dstmfab = std::get<amrex::MultiFab>(*dst.mfabs.at(m));
+      std::array<const amrex::MultiFab *, N> srcmfabs;
+      for (std::size_t n = 0; n < N; ++n)
+        srcmfabs[n] = &std::get<amrex::MultiFab>(*srcs[n]->mfabs.at(m));
+      detail::lincomb_body(scale, factors, dstmfab, srcmfabs, read_dst
+#ifndef AMREX_USE_GPU
+                           ,
+                           tasks
+#endif
+      );
     }
   }
 
@@ -714,16 +778,21 @@ extern "C" void ODESolvers_Solve(CCTK_ARGUMENTS) {
         assert(rhs_gi != groupdata.groupindex);
         auto &rhs_groupdata = *leveldata.groupdata.at(rhs_gi);
         assert(rhs_groupdata.numvars == groupdata.numvars);
-        if (CarpetX::vartype_is_real4(groupdata.vartype) ||
+        // A group's var/rhs/tmp storage always shares one precision; the
+        // variable group and its RHS group must therefore agree, even
+        // though different (var, rhs) group pairs in the same state may
+        // each be CCTK_REAL or CCTK_REAL4 independently.
+        if (CarpetX::vartype_is_real4(groupdata.vartype) !=
             CarpetX::vartype_is_real4(rhs_groupdata.vartype))
-          CCTK_VERROR("ODESolvers is not yet supported for CCTK_REAL4 grid "
-                     "function group %s",
-                     groupdata.groupname.c_str());
+          CCTK_VERROR("ODESolvers: variable group %s and its RHS group %s "
+                     "must have the same precision (CCTK_REAL vs "
+                     "CCTK_REAL4)",
+                     groupdata.groupname.c_str(),
+                     rhs_groupdata.groupname.c_str());
         var.groupdatas.push_back(&groupdata);
-        var.mfabs.push_back(&CarpetX::as_mfab_real(*groupdata.mfab.at(tl)));
+        var.mfabs.push_back(groupdata.mfab.at(tl).get());
         rhs.groupdatas.push_back(&rhs_groupdata);
-        rhs.mfabs.push_back(
-            &CarpetX::as_mfab_real(*rhs_groupdata.mfab.at(tl)));
+        rhs.mfabs.push_back(rhs_groupdata.mfab.at(tl).get());
         if (do_accumulate_nvars) {
           nvars += groupdata.numvars;
           var_groups.push_back(groupdata.groupindex);
