@@ -27,6 +27,9 @@
 
 STORAGE: state8 state4 state2
 STORAGE: state8_2lev state4_2lev state2_2lev
+STORAGE: state8_edgex state4_edgex state2_edgex
+STORAGE: state8_edgey state4_edgey state2_edgey
+STORAGE: state8_edgez state4_edgez state2_edgez
 STORAGE: state8_bc state4_bc state2_bc
 STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol state2_evol rhs2_evol
 
@@ -53,6 +56,9 @@ SCHEDULE TestReal4_PostRecover_Sync AT post_recover_variables AFTER TestReal4_Po
   OPTIONS: global
   SYNC: state8 state4 state2
   SYNC: state8_2lev state4_2lev state2_2lev
+  SYNC: state8_edgex state4_edgex state2_edgex
+  SYNC: state8_edgey state4_edgey state2_edgey
+  SYNC: state8_edgez state4_edgez state2_edgez
   SYNC: state8_bc state4_bc state2_bc
   SYNC: state8_evol rhs8_evol state4_evol rhs4_evol state2_evol rhs2_evol
 } "Re-sync every test group's ghost zones and outer boundary after checkpoint recovery (which only restores each group's interior), for the same reason -- and covering the same unconditional set of groups -- as the postregrid/postrestrict Sync items below"
@@ -86,12 +92,18 @@ SCHEDULE TestReal4_2Lev_Initialize AT initial
   WRITES: state8_2lev(interior)
   WRITES: state4_2lev(interior)
   WRITES: state2_2lev(interior)
-} "Initialize the REAL4, REAL8, and REAL2 linear test states on the coarse level"
+  WRITES: state8_edgex(interior) state4_edgex(interior) state2_edgex(interior)
+  WRITES: state8_edgey(interior) state4_edgey(interior) state2_edgey(interior)
+  WRITES: state8_edgez(interior) state4_edgez(interior) state2_edgez(interior)
+} "Initialize the REAL4, REAL8, and REAL2 linear test states on the coarse level (vertex-centred state*_2lev, and edge-centred state*_edgex/y/z for the restriction test, interim I2 -- see interface.ccl)"
 
 SCHEDULE TestReal4_2Lev_Sync AT initial AFTER TestReal4_2Lev_Initialize
 {
   LANG: C
   SYNC: state8_2lev state4_2lev state2_2lev
+  SYNC: state8_edgex state4_edgex state2_edgex
+  SYNC: state8_edgey state4_edgey state2_edgey
+  SYNC: state8_edgez state4_edgez state2_edgez
 } "Sync test data (single level only exists at this point)"
 
 # The two postregrid/postrestrict Sync items below are unconditional
@@ -111,6 +123,9 @@ SCHEDULE TestReal4_2Lev_Sync AT postregrid
   LANG: C
   SYNC: state8 state4 state2
   SYNC: state8_2lev state4_2lev state2_2lev
+  SYNC: state8_edgex state4_edgex state2_edgex
+  SYNC: state8_edgey state4_edgey state2_edgey
+  SYNC: state8_edgez state4_edgez state2_edgez
   SYNC: state8_bc state4_bc state2_bc
   SYNC: state8_evol state4_evol state2_evol
 } "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written. rhs8_evol/rhs4_evol/rhs2_evol are deliberately excluded: they are TAGS='checkpoint=\"no\"' scratch groups that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing them here would trip the sync precondition on their invalid new-level interior; they are recomputed every ODESolvers RHS evaluation and never need to survive a regrid/restrict"
@@ -120,6 +135,9 @@ SCHEDULE TestReal4_2Lev_Sync AT postrestrict
   LANG: C
   SYNC: state8 state4 state2
   SYNC: state8_2lev state4_2lev state2_2lev
+  SYNC: state8_edgex state4_edgex state2_edgex
+  SYNC: state8_edgey state4_edgey state2_edgey
+  SYNC: state8_edgez state4_edgez state2_edgez
   SYNC: state8_bc state4_bc state2_bc
   SYNC: state8_evol state4_evol state2_evol
 } "Sync all test groups after restriction, for the same reason as the postregrid item above (rhs8_evol/rhs4_evol/rhs2_evol excluded for the same reason)"
@@ -133,6 +151,18 @@ if (run_2lev_test)
     READS: state4_2lev(everywhere)
     READS: state2_2lev(everywhere)
   } "Verify the REAL4, REAL8, and REAL2 linear test states against the analytic function on every active refinement level, including ghost zones filled by prolongation"
+
+  # Interim: local FAB-templated edge average-down. Upstream goal: template
+  # amrex::average_down_edges over FAB (mirroring average_down_faces); drop
+  # this kernel when the ET's AMReX includes that. (interface.ccl has the
+  # matching comment on the state*_edgex/y/z group declarations.)
+  SCHEDULE TestReal4_2Lev_EdgeCheck AT analysis AFTER TestReal4_2Lev_Check
+  {
+    LANG: C
+    READS: state8_edgex(everywhere) state4_edgex(everywhere) state2_edgex(everywhere)
+    READS: state8_edgey(everywhere) state4_edgey(everywhere) state2_edgey(everywhere)
+    READS: state8_edgez(everywhere) state4_edgez(everywhere) state2_edgez(everywhere)
+  } "Verify the REAL8, REAL4, and REAL2 edge-centered linear test states on the coarse level only, after restriction from the fine level created by BoxInBox's regrid"
 }
 
 

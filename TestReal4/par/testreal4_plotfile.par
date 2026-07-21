@@ -1,0 +1,84 @@
+# Phase 4 self-checking mixed-precision test: AMReX plotfile output. Runs
+# the same single-level periodic ghost-sync self-test as par/testreal4.par
+# (state8/state4/state2, TestReal4_Initialize/_Check/_CheckGF3D5), but with
+# CarpetX::out_plotfile_groups enabled for all three of state8 (REAL8),
+# state4 (REAL4), and state2 (REAL2), to verify that AMReX plotfile output
+# is precision-generic (interim I1: reduced-precision groups are widened to
+# double for plotfile output, see CarpetX/src/io.cxx's OutputPlotfile) --
+# i.e. that the plotfile varlist is complete (REAL4/REAL2 groups are no
+# longer silently skipped) and every group's on-disk values agree with the
+# in-memory ones. This parfile only writes the plotfile; verifying its
+# contents (e.g. with AMReX's `fcompare`/`fextract`, or by reading it back)
+# happens separately, not in this thorn.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    TestReal4
+"
+
+Cactus::cctk_show_schedule = "no"
+Cactus::presync_mode = "mixed-error"
+
+Cactus::cctk_itlast = 1
+
+CarpetX::verbose = "no"
+CarpetX::poison_undefined_values = "yes"
+
+# Domain extent is 2 in each direction, an integer multiple of the
+# analytic function's period of 1, so that the ghost zones' periodic
+# images are reproduced exactly by the domain's periodic boundaries.
+CarpetX::xmin = -1.0
+CarpetX::ymin = -1.0
+CarpetX::zmin = -1.0
+CarpetX::xmax = +1.0
+CarpetX::ymax = +1.0
+CarpetX::zmax = +1.0
+
+CarpetX::ncells_x = 32
+CarpetX::ncells_y = 32
+CarpetX::ncells_z = 32
+
+# Unigrid: a single refinement level only.
+CarpetX::max_num_levels = 1
+
+CarpetX::ghost_size_x = 3
+CarpetX::ghost_size_y = 3
+CarpetX::ghost_size_z = 3
+
+Driver::periodic = "yes"
+Driver::periodic_x = "yes"
+Driver::periodic_y = "yes"
+Driver::periodic_z = "yes"
+
+CarpetX::reflection_x = "no"
+CarpetX::reflection_y = "no"
+CarpetX::reflection_z = "no"
+
+CarpetX::reflection_upper_x = "no"
+CarpetX::reflection_upper_y = "no"
+CarpetX::reflection_upper_z = "no"
+
+# --- File output: AMReX plotfile only -----------------------------------
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::parfile_write = no
+
+CarpetX::out_metadata = no
+
+# All three precision groups (interim I1: state4/state2 are widened to
+# double for the plotfile, rather than being skipped).
+CarpetX::out_plotfile_groups = "
+    TestReal4::state8
+    TestReal4::state4
+    TestReal4::state2
+"
+
+# This parfile activates TestReal4's original periodic self-test only.
+TestReal4::run_periodic_test = "yes"
+# TestReal4_Check hard-verifies this exact parfile-steered CCTK_REAL2 value
+TestReal4::check_tolerance2 = 0.0078125
+TestReal4::run_2lev_test = "no"
+TestReal4::run_bc_test = "no"
+TestReal4::run_evol_test = "no"

@@ -59,6 +59,71 @@ CCTK_REAL2 state2_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
 
 
 
+# --- Phase 2: edge-centered restriction test (interim I2) -------------------
+#
+# Edge-centered (centering rank 1: cell-centered along the edge's own
+# direction, vertex-centered in the two transverse directions -- see
+# StaggeredWaveToyX::fxstate/fystate/fzstate for the same {cvv}/{vcv}/{vvc}
+# convention) counterparts of state8_2lev/state4_2lev/state2_2lev above, one
+# set of three groups per edge direction. Ridden along on the same
+# testreal4_2lev.par regrid, these exercise CarpetX::Restrict's
+# CCTK_REAL4/CCTK_REAL2 edge-centered path (schedule.cxx), which as of this
+# writing goes through a local FAB-templated average-down kernel rather
+# than amrex::average_down_edges (see src/testreal4_2lev.cxx's
+# TestReal4_2Lev_EdgeCheck and the schedule.ccl comment above the relevant
+# SYNC items).
+#
+# Interim: local FAB-templated edge average-down. Upstream goal: template
+# amrex::average_down_edges over FAB (mirroring average_down_faces); drop
+# this kernel when the ET's AMReX includes that.
+
+CCTK_REAL8 state8_edgex TYPE=gf CENTERING={cvv} TAGS='dirichlet_values={0.0}'
+{
+  u8_edgex
+} "REAL8 linear test state, edge-centered along x, for the restriction test"
+
+CCTK_REAL4 state4_edgex TYPE=gf CENTERING={cvv} TAGS='dirichlet_values={0.0}'
+{
+  u4_edgex
+} "REAL4 linear test state, edge-centered along x, for the restriction test"
+
+CCTK_REAL2 state2_edgex TYPE=gf CENTERING={cvv} TAGS='dirichlet_values={0.0}'
+{
+  u2_edgex
+} "REAL2 linear test state, edge-centered along x, for the restriction test"
+
+CCTK_REAL8 state8_edgey TYPE=gf CENTERING={vcv} TAGS='dirichlet_values={0.0}'
+{
+  u8_edgey
+} "REAL8 linear test state, edge-centered along y, for the restriction test"
+
+CCTK_REAL4 state4_edgey TYPE=gf CENTERING={vcv} TAGS='dirichlet_values={0.0}'
+{
+  u4_edgey
+} "REAL4 linear test state, edge-centered along y, for the restriction test"
+
+CCTK_REAL2 state2_edgey TYPE=gf CENTERING={vcv} TAGS='dirichlet_values={0.0}'
+{
+  u2_edgey
+} "REAL2 linear test state, edge-centered along y, for the restriction test"
+
+CCTK_REAL8 state8_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
+{
+  u8_edgez
+} "REAL8 linear test state, edge-centered along z, for the restriction test"
+
+CCTK_REAL4 state4_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
+{
+  u4_edgez
+} "REAL4 linear test state, edge-centered along z, for the restriction test"
+
+CCTK_REAL2 state2_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
+{
+  u2_edgez
+} "REAL2 linear test state, edge-centered along z, for the restriction test"
+
+
+
 # --- Phase 2: physical boundary condition test ------------------------------
 #
 # Cell-centred, to also exercise the CC boundary condition code path (the
