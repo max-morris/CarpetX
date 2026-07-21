@@ -18,6 +18,7 @@
 #include <util_Table.h>
 
 #include <AMReX.H>
+#include <AMReX_FabArray.H>
 #include <AMReX_Orientation.H>
 #include <AMReX_PlotFileUtil.H>
 #include <AMReX_VisMF.H>
@@ -26,7 +27,6 @@
 
 #include <algorithm>
 #include <regex>
-#include <set>
 #include <utility>
 #include <vector>
 
@@ -80,6 +80,21 @@ std::string get_simulation_name() {
   if (last_dot != std::string::npos && last_dot > 0)
     name = name.substr(0, last_dot);
   return name;
+}
+
+// Interim: widen reduced-precision groups to double for plotfile output.
+// Upstream goal: template the WriteMultiLevelPlotfile/VisMF path over the
+// FAB type (the plotfile RealDescriptor already supports 32-bit reals) so
+// f32 is written natively; f16 will remain widened (format has no binary16).
+amrex::MultiFab widen_group_to_double(const AnyMultiFab &mfab) {
+  return std::visit(
+      [](const auto &src) -> amrex::MultiFab {
+        amrex::MultiFab dst(src.boxArray(), src.DistributionMap(),
+                           src.nComp(), src.nGrowVect());
+        amrex::Copy(dst, src, 0, 0, src.nComp(), src.nGrowVect());
+        return dst;
+      },
+      mfab);
 }
 } // namespace
 
@@ -311,24 +326,9 @@ void OutputPlotfile(const cGH *restrict cctkGH) {
     auto &restrict groupdata0 =
         *ghext->patchdata.at(0).leveldata.at(0).groupdata.at(gi);
     if (groupdata0.mfab.size() > 0) {
-      if (vartype_is_real4(groupdata0.vartype)) {
-        static std::set<int> warned_groups;
-        if (warned_groups.insert(gi).second)
-          CCTK_VWARN(CCTK_WARN_ALERT,
-                    "Plotfile output is not yet supported for CCTK_REAL4 "
-                    "grid function group %s, skipping",
-                    groupdata0.groupname.c_str());
-        continue;
-      }
-      if (vartype_is_real2(groupdata0.vartype)) {
-        static std::set<int> warned_groups;
-        if (warned_groups.insert(gi).second)
-          CCTK_VWARN(CCTK_WARN_ALERT,
-                    "Plotfile output is not yet supported for CCTK_REAL2 "
-                    "grid function group %s, skipping",
-                    groupdata0.groupname.c_str());
-        continue;
-      }
+      // Interim: see widen_group_to_double above. Real8 groups are written
+      // natively, unwidened, exactly as before.
+      const bool widen = !vartype_is_real8(groupdata0.vartype);
       const int tl = 0;
 
       std::string groupname = CCTK_FullGroupName(gi);
@@ -362,9 +362,20 @@ void OutputPlotfile(const cGH *restrict cctkGH) {
         amrex::Vector<amrex::Geometry> geoms(patchdata.leveldata.size());
         amrex::Vector<int> iters(patchdata.leveldata.size());
         amrex::Vector<amrex::IntVect> reffacts(patchdata.leveldata.size());
+        // Holds the per-level widened doubles for REAL4/REAL2 groups; must
+        // outlive the WriteMultiLevelPlotfile call below, since `mfabs`
+        // points into it.
+        std::vector<amrex::MultiFab> widened(widen ? patchdata.leveldata.size()
+                                                    : 0);
         for (const auto &restrict leveldata : patchdata.leveldata) {
-          mfabs.at(leveldata.level) =
-              &as_mfab_real(*leveldata.groupdata.at(gi)->mfab.at(tl));
+          auto &restrict groupdata = *leveldata.groupdata.at(gi);
+          if (widen) {
+            widened.at(leveldata.level) =
+                widen_group_to_double(*groupdata.mfab.at(tl));
+            mfabs.at(leveldata.level) = &widened.at(leveldata.level);
+          } else {
+            mfabs.at(leveldata.level) = &as_mfab_real(*groupdata.mfab.at(tl));
+          }
           geoms.at(leveldata.level) = patchdata.amrcore->Geom(leveldata.level);
           iters.at(leveldata.level) = cctk_iteration;
           reffacts.at(leveldata.level) = amrex::IntVect{2, 2, 2};
