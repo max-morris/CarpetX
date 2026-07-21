@@ -31,9 +31,10 @@ namespace CarpetX {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-BoundaryCondition::BoundaryCondition(
+template <typename T>
+BoundaryCondition<T>::BoundaryCondition(
     const GHExt::PatchData::LevelData::GroupData &groupdata,
-    amrex::FArrayBox &dest)
+    amrex::BaseFab<T> &dest)
     : groupdata(groupdata), patchdata(ghext->patchdata.at(groupdata.patch)),
       geom(patchdata.amrcore->Geom(groupdata.level)), dest(dest),
       imin{geom.Domain().smallEnd(0), geom.Domain().smallEnd(1),
@@ -83,7 +84,7 @@ BoundaryCondition::BoundaryCondition(
   }
 }
 
-void BoundaryCondition::apply() const {
+template <typename T> void BoundaryCondition<T>::apply() const {
   apply_on_face<NEG, NEG, NEG>();
   apply_on_face<INT, NEG, NEG>();
   apply_on_face<POS, NEG, NEG>();
@@ -114,5 +115,8 @@ void BoundaryCondition::apply() const {
   apply_on_face<INT, POS, POS>();
   apply_on_face<POS, POS, POS>();
 }
+
+template struct BoundaryCondition<CCTK_REAL>;
+template struct BoundaryCondition<CCTK_REAL4>;
 
 } // namespace CarpetX

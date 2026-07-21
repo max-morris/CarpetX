@@ -4,6 +4,8 @@
 #include "driver.hxx"
 #include "loop_device.hxx"
 
+#include <AMReX_BaseFab.H>
+
 namespace CarpetX {
 
 namespace boundaries_detail {
@@ -30,11 +32,19 @@ using namespace boundaries_detail;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-struct BoundaryCondition {
+// `BoundaryCondition<T>` applies symmetry and boundary conditions to a
+// single T-typed fab, where T is the grid function's storage element type
+// (CCTK_REAL for REAL/REAL8 groups, CCTK_REAL4 for REAL4 groups). Only the
+// fab data itself (dest, destptr, and the GF3D2 view used in the kernel) is
+// templated on T; coordinates (xmin/xmax/dx) and the dirichlet/robin/
+// reflection constant vectors are read from `groupdata` as CCTK_REAL and are
+// converted to T only at the point where a value is stored into the fab, so
+// that double-precision (T = CCTK_REAL) results are bit-for-bit unchanged.
+template <typename T> struct BoundaryCondition {
   const GHExt::PatchData::LevelData::GroupData &groupdata;
   const GHExt::PatchData &patchdata;
   const amrex::Geometry &geom;
-  amrex::FArrayBox &dest;
+  amrex::BaseFab<T> &dest;
 
   // Interior of the domain: Do not set any points in this region
   Arith::vect<int, dim> imin, imax;
@@ -44,10 +54,10 @@ struct BoundaryCondition {
   Arith::vect<int, dim> dmin, dmax;
 
   Loop::GF3D2layout layout;
-  CCTK_REAL *restrict destptr;
+  T *restrict destptr;
 
   BoundaryCondition(const GHExt::PatchData::LevelData::GroupData &groupdata,
-                    amrex::FArrayBox &dest);
+                    amrex::BaseFab<T> &dest);
 
   BoundaryCondition(const BoundaryCondition &) = delete;
   BoundaryCondition(BoundaryCondition &&) = delete;
@@ -72,6 +82,14 @@ struct BoundaryCondition {
   void apply_on_face_symbcxyz(const Arith::vect<int, dim> &bmin,
                               const Arith::vect<int, dim> &bmax) const;
 };
+
+// The constructor and `apply()` (the class template's non-template members)
+// are explicitly instantiated for both supported element types in
+// boundaries.cxx; member function templates (apply_on_face and friends) are
+// explicitly instantiated per-(T, NI, NJ, NK) combination in the
+// boundaries_impl_*.cxx files (see boundaries_impl.hxx).
+extern template struct BoundaryCondition<CCTK_REAL>;
+extern template struct BoundaryCondition<CCTK_REAL4>;
 
 } // namespace CarpetX
 

@@ -2,8 +2,11 @@
 
 namespace CarpetX {
 
-template void BoundaryCondition::apply_on_face<NEG, NEG, NEG>() const;
-template void BoundaryCondition::apply_on_face<INT, NEG, NEG>() const;
-template void BoundaryCondition::apply_on_face<POS, NEG, NEG>() const;
+template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, NEG, NEG>() const;
+template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, NEG, NEG>() const;
+template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, NEG, NEG>() const;
+template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, NEG, NEG>() const;
+template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, NEG, NEG>() const;
+template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, NEG, NEG>() const;
 
 } // namespace CarpetX

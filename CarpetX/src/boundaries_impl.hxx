@@ -28,8 +28,9 @@ constexpr int NEG = -1, INT = 0, POS = +1;
 
 constexpr int maxncomps = 16;
 
+template <typename T>
 template <int NI, int NJ, int NK>
-void BoundaryCondition::apply_on_face() const {
+void BoundaryCondition<T>::apply_on_face() const {
   constexpr Arith::vect<int, dim> inormal{NI, NJ, NK};
   static_assert(!all(inormal == 0));
 
@@ -97,8 +98,9 @@ void BoundaryCondition::apply_on_face() const {
   }
 }
 
+template <typename T>
 template <int NI, int NJ, int NK, symmetry_t SCI, boundary_t BCI>
-void BoundaryCondition::apply_on_face_symbcx(
+void BoundaryCondition<T>::apply_on_face_symbcx(
     const Arith::vect<int, dim> &bmin,
     const Arith::vect<int, dim> &bmax) const {
   // Find which symmetry or boundary conditions apply to us. On edges
@@ -140,9 +142,10 @@ void BoundaryCondition::apply_on_face_symbcx(
   }
 }
 
+template <typename T>
 template <int NI, int NJ, int NK, symmetry_t SCI, boundary_t BCI,
           symmetry_t SCJ, boundary_t BCJ>
-void BoundaryCondition::apply_on_face_symbcxy(
+void BoundaryCondition<T>::apply_on_face_symbcxy(
     const Arith::vect<int, dim> &bmin,
     const Arith::vect<int, dim> &bmax) const {
   // Find which symmetry or boundary conditions apply to us. On edges
@@ -185,9 +188,10 @@ void BoundaryCondition::apply_on_face_symbcxy(
   }
 }
 
+template <typename T>
 template <int NI, int NJ, int NK, symmetry_t SCI, boundary_t BCI,
           symmetry_t SCJ, boundary_t BCJ, symmetry_t SCK, boundary_t BCK>
-void BoundaryCondition::apply_on_face_symbcxyz(
+void BoundaryCondition<T>::apply_on_face_symbcxyz(
     const Arith::vect<int, dim> &bmin,
     const Arith::vect<int, dim> &bmax) const {
   constexpr Arith::vect<int, dim> inormal{NI, NJ, NK};
@@ -301,7 +305,7 @@ void BoundaryCondition::apply_on_face_symbcxyz(
 
     // We cannot capture `destptr` directly (on Summit, with CUDA 11.5.2)
     // We cannot use a `restrict` declaration either.
-    CCTK_REAL *const destptr1 = destptr;
+    T *const destptr1 = destptr;
 
     const auto kernel =
         [
@@ -378,12 +382,12 @@ void BoundaryCondition::apply_on_face_symbcxyz(
         const CCTK_REAL dirichlet_value = dirichlet_values[comp];
         const CCTK_REAL robin_value = robin_values[comp];
         const CCTK_REAL reflection_parity = reflection_parities[comp];
-        const Loop::GF3D2<CCTK_REAL> var(layout, destptr + comp * layout.np);
+        const Loop::GF3D2<T> var(layout, destptr + comp * layout.np);
 
 #ifdef CCTK_DEBUG
         using std::isnan;
 #endif
-        CCTK_REAL val;
+        T val;
         if constexpr (any(boundaries == boundary_t::dirichlet)) {
           val = dirichlet_value;
         } else {
@@ -408,7 +412,7 @@ void BoundaryCondition::apply_on_face_symbcxyz(
           }
           if constexpr (any(boundaries == boundary_t::linear_extrapolation)) {
             // Calculate gradient
-            const CCTK_REAL grad = val - var(src + delta);
+            const T grad = val - var(src + delta);
             using std::sqrt;
             val += sqrt(sum(pow2(dst - src)) / sum(pow2(delta))) * grad;
           }
@@ -441,35 +445,62 @@ void BoundaryCondition::apply_on_face_symbcxyz(
   }
 }
 
-extern template void BoundaryCondition::apply_on_face<NEG, NEG, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<INT, NEG, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<POS, NEG, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<NEG, INT, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<INT, INT, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<POS, INT, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<NEG, POS, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<INT, POS, NEG>() const;
-extern template void BoundaryCondition::apply_on_face<POS, POS, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, NEG, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, NEG, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, NEG, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, NEG, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, NEG, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, NEG, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, INT, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, INT, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, INT, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, INT, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, INT, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, INT, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, POS, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, POS, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, POS, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, POS, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, POS, NEG>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, POS, NEG>() const;
 
-extern template void BoundaryCondition::apply_on_face<NEG, NEG, INT>() const;
-extern template void BoundaryCondition::apply_on_face<INT, NEG, INT>() const;
-extern template void BoundaryCondition::apply_on_face<POS, NEG, INT>() const;
-extern template void BoundaryCondition::apply_on_face<NEG, INT, INT>() const;
-// extern template void BoundaryCondition::apply_on_face<INT, INT, INT>() const;
-extern template void BoundaryCondition::apply_on_face<POS, INT, INT>() const;
-extern template void BoundaryCondition::apply_on_face<NEG, POS, INT>() const;
-extern template void BoundaryCondition::apply_on_face<INT, POS, INT>() const;
-extern template void BoundaryCondition::apply_on_face<POS, POS, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, NEG, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, NEG, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, NEG, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, NEG, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, NEG, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, NEG, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, INT, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, INT, INT>() const;
+// extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, INT, INT>() const;
+// extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, INT, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, INT, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, INT, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, POS, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, POS, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, POS, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, POS, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, POS, INT>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, POS, INT>() const;
 
-extern template void BoundaryCondition::apply_on_face<NEG, NEG, POS>() const;
-extern template void BoundaryCondition::apply_on_face<INT, NEG, POS>() const;
-extern template void BoundaryCondition::apply_on_face<POS, NEG, POS>() const;
-extern template void BoundaryCondition::apply_on_face<NEG, INT, POS>() const;
-extern template void BoundaryCondition::apply_on_face<INT, INT, POS>() const;
-extern template void BoundaryCondition::apply_on_face<POS, INT, POS>() const;
-extern template void BoundaryCondition::apply_on_face<NEG, POS, POS>() const;
-extern template void BoundaryCondition::apply_on_face<INT, POS, POS>() const;
-extern template void BoundaryCondition::apply_on_face<POS, POS, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, NEG, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, NEG, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, NEG, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, NEG, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, NEG, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, NEG, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, INT, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, INT, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, INT, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, INT, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, INT, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, INT, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, POS, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, POS, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, POS, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, POS, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, POS, POS>() const;
+extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, POS, POS>() const;
 
 } // namespace CarpetX
 
