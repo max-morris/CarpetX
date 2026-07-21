@@ -1,6 +1,7 @@
 #include "io_openpmd.hxx"
 
 #include "driver.hxx"
+#include "io_real2.hxx"
 #include "timer.hxx"
 
 #include <div.hxx>
@@ -424,12 +425,12 @@ struct carpetx_openpmd_t {
   void InputOpenPMD(const cGH *const cctkGH,
                     const std::vector<bool> &input_group,
                     const std::string &input_dir,
-                    const std::string &input_file);
+                    const std::string &input_file, bool is_checkpoint);
 
   void OutputOpenPMD(const cGH *const cctkGH,
                      const std::vector<bool> &output_group,
                      const std::string &output_dir,
-                     const std::string &output_file);
+                     const std::string &output_file, bool is_checkpoint);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -451,21 +452,22 @@ void InputOpenPMDGridStructure(cGH *cctkGH, const std::string &input_dir,
       cctkGH, input_dir, input_file, input_iteration);
 }
 void InputOpenPMD(const cGH *cctkGH, const std::vector<bool> &input_group,
-                  const std::string &input_dir, const std::string &input_file) {
+                  const std::string &input_dir, const std::string &input_file,
+                  const bool is_checkpoint) {
   if (!carpetx_openpmd_t::self)
     carpetx_openpmd_t::self = std::make_optional<carpetx_openpmd_t>();
   carpetx_openpmd_t::self->InputOpenPMD(cctkGH, input_group, input_dir,
-                                        input_file);
+                                        input_file, is_checkpoint);
 }
 
 void OutputOpenPMD(const cGH *const cctkGH,
                    const std::vector<bool> &output_group,
                    const std::string &output_dir,
-                   const std::string &output_file) {
+                   const std::string &output_file, const bool is_checkpoint) {
   if (!carpetx_openpmd_t::self)
     carpetx_openpmd_t::self = std::make_optional<carpetx_openpmd_t>();
   carpetx_openpmd_t::self->OutputOpenPMD(cctkGH, output_group, output_dir,
-                                         output_file);
+                                         output_file, is_checkpoint);
 }
 
 void ShutdownOpenPMD() { carpetx_openpmd_t::self.reset(); }
@@ -679,7 +681,8 @@ void carpetx_openpmd_t::InputOpenPMDGridStructure(cGH *cctkGH,
 void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                                      const std::vector<bool> &input_group,
                                      const std::string &input_dir,
-                                     const std::string &input_file) {
+                                     const std::string &input_file,
+                                     const bool is_checkpoint) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
 
@@ -1007,11 +1010,30 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                 T *const contig_ptr =
                     amrex_var_ptr + extbox.size() - box.size();
                 // TODO: optimize memory layout
-                if (poison_undefined_values) {
-                  const poison_value_t<T> poison_value;
+                // `T` can be `unsigned short` here: read_group is also
+                // instantiated for the raw 16-bit checkpoint payload of a
+                // CCTK_REAL2 group (see rawify_real2/derawify_real2 in
+                // io_real2.hxx). There is no poison_value_t<unsigned short>
+                // specialization (ipoison_t is only specialized for the
+                // real/complex/int vartypes' actual element types, not for
+                // this raw bit-pattern buffer type), so skip poisoning for
+                // T=unsigned short rather than instantiate that template.
+                // This buffer is only ever a temporary that
+                // derawify_real2() reinterprets straight back into
+                // CCTK_REAL2 immediately after this function returns, so
+                // there is no separate "REAL2 poison pattern" to apply to
+                // it here; poisoning of not-actually-read REAL2 ghost/
+                // exterior points is instead handled by whichever CarpetX
+                // code path initializes/poisons a freshly allocated
+                // CCTK_REAL2 group in the first place (this function only
+                // ever reads a checkpoint's saved interior).
+                if constexpr (!std::is_same_v<T, unsigned short>) {
+                  if (poison_undefined_values) {
+                    const poison_value_t<T> poison_value;
 #pragma omp simd
-                  for (int n = 0; n < np; ++n)
-                    poison_value.set_to_poison(contig_ptr[n]);
+                    for (int n = 0; n < np; ++n)
+                      poison_value.set_to_poison(contig_ptr[n]);
+                  }
                 }
                 record_components.at(vi).loadChunkRaw(contig_ptr, start, count);
                 tasks.emplace_back([=]() {
@@ -1028,7 +1050,60 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
           } // for local_component
           }; // read_group
 
-          if (vartype_is_real4(cgroup.vartype))
+          if (vartype_is_real2(cgroup.vartype)) {
+#ifdef HAVE_CCTK_REAL2
+            // D6: CCTK_REAL2 groups are read either as their raw 16-bit
+            // checkpoint payload (bit-exact round trip) or, for a regular
+            // (non-checkpoint) file, as widened float32 data -- mirroring
+            // how OutputOpenPMD below wrote them. Either way, the actual
+            // read happens into a same-shaped temporary buffer (matching
+            // whichever dtype the file actually holds), which is then
+            // converted back into the group's real hMultiFab storage.
+            //
+            // The checkpoint leg reads a float32 "carrier" (see
+            // widen_raw16_to_carrier/narrow_carrier_to_raw16 in
+            // io_real2.hxx for why: this openPMD-api/ADIOS2 combination
+            // cannot rediscover a multi-rank USHORT record on read), then
+            // truncates it back down to the raw 16-bit payload before
+            // reinterpreting that as CCTK_REAL2.
+            //
+            // The temporary buffer (carrier/widened) must stay alive past
+            // this point: when the group has ghost zones, read_group's
+            // "else" branch above only *queues* (into `tasks`) the work
+            // that scatters this rank's read data into the buffer's final
+            // in-memory layout -- the actual scatter, and hence the buffer
+            // having its true contents, only happens once every group's
+            // tasks have been queued and `series->flush()` runs the
+            // deferred reads, much further down in this function. So the
+            // buffer -> CCTK_REAL2 conversion cannot happen here either
+            // (it would read stale/uninitialized data); it must be queued
+            // as its own task, ordered after read_group's own tasks for
+            // this group (guaranteed, since `tasks` is append-only and
+            // read_group already pushed its tasks synchronously above).
+            // The buffer is kept alive by moving it into that task's
+            // closure (via shared_ptr, for std::function's copyability).
+            hMultiFab &real2_mfab = std::get<hMultiFab>(*groupdata.mfab[tl]);
+            if (is_checkpoint) {
+              auto carrier = std::make_shared<amrex::fMultiFab>(
+                  alloc_like_real2<amrex::fMultiFab>(real2_mfab));
+              read_group(*carrier);
+              tasks.emplace_back([carrier, &real2_mfab]() {
+                const rawMultiFab raw = narrow_carrier_to_raw16(*carrier);
+                derawify_real2(raw, real2_mfab);
+              });
+            } else {
+              auto widened = std::make_shared<amrex::fMultiFab>(
+                  alloc_like_real2<amrex::fMultiFab>(real2_mfab));
+              read_group(*widened);
+              tasks.emplace_back([widened, &real2_mfab]() {
+                narrow_float_to_real2(*widened, real2_mfab);
+              });
+            }
+#else
+            assert(0 && "unreachable: vartype_is_real2 is always false "
+                        "without HAVE_CCTK_REAL2");
+#endif
+          } else if (vartype_is_real4(cgroup.vartype))
             read_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
           else
             read_group(as_mfab_real(*groupdata.mfab[tl]));
@@ -1317,7 +1392,8 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
 void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                                       const std::vector<bool> &output_group,
                                       const std::string &output_dir,
-                                      const std::string &output_file) {
+                                      const std::string &output_file,
+                                      const bool is_checkpoint) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
 
@@ -1718,7 +1794,29 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
           } // for local_component
           }; // write_group
 
-          if (vartype_is_real4(cgroup.vartype))
+          if (vartype_is_real2(cgroup.vartype)) {
+#ifdef HAVE_CCTK_REAL2
+            // D6: widen to float32 for regular (non-checkpoint) output.
+            // For a checkpoint, the raw 16-bit payload must round-trip
+            // bit-exactly, but it cannot be written as a USHORT openPMD
+            // record directly: this openPMD-api/ADIOS2 combination can't
+            // rediscover a multi-rank USHORT record on read (see the
+            // comment on widen_raw16_to_carrier/narrow_carrier_to_raw16 in
+            // io_real2.hxx). So the raw 16 bits are zero-extended and
+            // bit-punned into a float32 "carrier" and written through the
+            // same (already load-bearing, proven-working) float32 code
+            // path used for CCTK_REAL4 groups.
+            const hMultiFab &real2_mfab =
+                std::get<hMultiFab>(*groupdata.mfab[tl]);
+            if (is_checkpoint)
+              write_group(widen_raw16_to_carrier(rawify_real2(real2_mfab)));
+            else
+              write_group(widen_real2_to_float(real2_mfab));
+#else
+            assert(0 && "unreachable: vartype_is_real2 is always false "
+                        "without HAVE_CCTK_REAL2");
+#endif
+          } else if (vartype_is_real4(cgroup.vartype))
             write_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
           else
             write_group(as_mfab_real(*groupdata.mfab[tl]));

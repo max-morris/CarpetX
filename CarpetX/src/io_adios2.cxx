@@ -1,6 +1,7 @@
 #include "io_adios2.hxx"
 
 #include "driver.hxx"
+#include "io_real2.hxx"
 #include "timer.hxx"
 
 #include <div.hxx>
@@ -356,7 +357,23 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
               } // for vi
               }; // define_group
 
-              if (vartype_is_real4(cgroup.vartype))
+              if (vartype_is_real2(cgroup.vartype)) {
+#ifdef HAVE_CCTK_REAL2
+                // D6: ADIOS2 has no fp16 dtype and is never used to
+                // checkpoint (see io.cxx's Checkpoint(), which only
+                // supports "openpmd"/"silo"), so CCTK_REAL2 groups are
+                // always widened to float32 here. Only the box
+                // layout/component count/ghost width matter for defining
+                // variable metadata (not the actual values), but reusing
+                // widen_real2_to_float keeps this in sync with the
+                // write_group dispatch below and avoids a second helper.
+                define_group(widen_real2_to_float(
+                    std::get<hMultiFab>(*groupdata.mfab[tl])));
+#else
+                assert(0 && "unreachable: vartype_is_real2 is always false "
+                            "without HAVE_CCTK_REAL2");
+#endif
+              } else if (vartype_is_real4(cgroup.vartype))
                 define_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
               else
                 define_group(as_mfab_real(*groupdata.mfab[tl]));
@@ -545,7 +562,16 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
             } // for vi
             }; // write_group
 
-            if (vartype_is_real4(cgroup.vartype))
+            if (vartype_is_real2(cgroup.vartype)) {
+#ifdef HAVE_CCTK_REAL2
+              // D6: see the matching define_group dispatch above.
+              write_group(widen_real2_to_float(
+                  std::get<hMultiFab>(*groupdata.mfab[tl])));
+#else
+              assert(0 && "unreachable: vartype_is_real2 is always false "
+                          "without HAVE_CCTK_REAL2");
+#endif
+            } else if (vartype_is_real4(cgroup.vartype))
               write_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
             else
               write_group(as_mfab_real(*groupdata.mfab[tl]));

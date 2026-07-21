@@ -194,7 +194,11 @@ void RecoverGH(const cGH *restrict cctkGH) {
   if (CCTK_EQUALS(recover_method, "openpmd")) {
 
 #ifdef HAVE_CAPABILITY_openPMD_api
-    InputOpenPMD(cctkGH, group_enabled, recover_dir, recover_file);
+    // is_checkpoint=true: this is checkpoint recovery (see D6 -- CCTK_REAL2
+    // groups round-trip via their raw 16-bit payload here, not widened
+    // float32).
+    InputOpenPMD(cctkGH, group_enabled, recover_dir, recover_file,
+                 /*is_checkpoint=*/true);
 #else
     CCTK_VERROR(
         "CarpetX::recover_method is set to \"openpmd\", but openPMD_api "
@@ -204,7 +208,9 @@ void RecoverGH(const cGH *restrict cctkGH) {
   } else if (CCTK_EQUALS(recover_method, "silo")) {
 
 #ifdef HAVE_CAPABILITY_Silo
-    InputSilo(cctkGH, group_enabled, recover_dir, recover_file);
+    // is_checkpoint=true: see the InputOpenPMD call above.
+    InputSilo(cctkGH, group_enabled, recover_dir, recover_file,
+              /*is_checkpoint=*/true);
 #else
     CCTK_VERROR("CarpetX::recover_method is set to \"silo\", but Silo "
                 "is not enabled");
@@ -659,7 +665,9 @@ void Checkpoint(const cGH *const restrict cctkGH) {
       }
       return enabled;
     }();
-    OutputOpenPMD(cctkGH, checkpoint_group, checkpoint_dir, checkpoint_file);
+    // is_checkpoint=true: see the InputOpenPMD call in RecoverGH above.
+    OutputOpenPMD(cctkGH, checkpoint_group, checkpoint_dir, checkpoint_file,
+                 /*is_checkpoint=*/true);
 #else
     // TODO: Check this at paramcheck
     CCTK_VERROR(
@@ -690,7 +698,9 @@ void Checkpoint(const cGH *const restrict cctkGH) {
       }
       return enabled;
     }();
-    OutputSilo(cctkGH, checkpoint_group, checkpoint_dir, checkpoint_file);
+    // is_checkpoint=true: see the InputSilo call in RecoverGH above.
+    OutputSilo(cctkGH, checkpoint_group, checkpoint_dir, checkpoint_file,
+              /*is_checkpoint=*/true);
 #else
     // TODO: Check this at paramcheck
     CCTK_VERROR("CarpetX::checkpoint_method is set to \"silo\", but Silo is "

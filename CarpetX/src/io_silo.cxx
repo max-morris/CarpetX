@@ -2,6 +2,7 @@
 
 #include "driver.hxx"
 #include "io_meta.hxx"
+#include "io_real2.hxx"
 #include "mpi_types.hxx"
 #include "timer.hxx"
 
@@ -72,6 +73,14 @@ template <>
 struct db_datatype<float> : std::integral_constant<int, DB_FLOAT> {};
 template <>
 struct db_datatype<double> : std::integral_constant<int, DB_DOUBLE> {};
+// Used for the raw 16-bit checkpoint payload of a CCTK_REAL2 group (see
+// rawify_real2/derawify_real2 in io_real2.hxx); Silo has no fp16 datatype,
+// but DB_SHORT is the right size (2 bytes) to hold the bit pattern exactly
+// -- signedness is irrelevant since these bits are never interpreted as a
+// number, only reinterpreted straight back into CCTK_REAL2.
+template <>
+struct db_datatype<unsigned short>
+    : std::integral_constant<int, DB_SHORT> {};
 template <typename T> constexpr int db_datatype_v = db_datatype<T>::value;
 
 // Access the box/distribution-map structure of a grid function group's
@@ -463,7 +472,8 @@ void InputSiloGridStructure(cGH *restrict const cctkGH,
 
 void InputSilo(const cGH *restrict const cctkGH,
                const std::vector<bool> &input_group,
-               const std::string &input_dir, const std::string &input_file) {
+               const std::string &input_dir, const std::string &input_file,
+               const bool is_checkpoint) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
 
@@ -699,7 +709,25 @@ void InputSilo(const cGH *restrict const cctkGH,
           } // for component
           }; // read_group
 
-          if (vartype_is_real4(groupdata.vartype))
+          if (vartype_is_real2(groupdata.vartype)) {
+#ifdef HAVE_CCTK_REAL2
+            // D6: see the matching InputOpenPMD dispatch in io_openpmd.cxx.
+            hMultiFab &real2_mfab = std::get<hMultiFab>(*groupdata.mfab[tl]);
+            if (is_checkpoint) {
+              rawMultiFab raw = alloc_like_real2<rawMultiFab>(real2_mfab);
+              read_group(raw);
+              derawify_real2(raw, real2_mfab);
+            } else {
+              amrex::fMultiFab widened =
+                  alloc_like_real2<amrex::fMultiFab>(real2_mfab);
+              read_group(widened);
+              narrow_float_to_real2(widened, real2_mfab);
+            }
+#else
+            assert(0 && "unreachable: vartype_is_real2 is always false "
+                        "without HAVE_CCTK_REAL2");
+#endif
+          } else if (vartype_is_real4(groupdata.vartype))
             read_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
           else
             read_group(as_mfab_real(*groupdata.mfab[tl]));
@@ -716,7 +744,8 @@ void InputSilo(const cGH *restrict const cctkGH,
 
 void OutputSilo(const cGH *restrict const cctkGH,
                 const std::vector<bool> &output_group,
-                const std::string &output_dir, const std::string &output_file) {
+                const std::string &output_dir, const std::string &output_file,
+                const bool is_checkpoint) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
 
@@ -1126,7 +1155,21 @@ void OutputSilo(const cGH *restrict const cctkGH,
           } // for component
           }; // write_group
 
-          if (vartype_is_real4(groupdata.vartype))
+          if (vartype_is_real2(groupdata.vartype)) {
+#ifdef HAVE_CCTK_REAL2
+            // D6: see the matching OutputOpenPMD dispatch in
+            // io_openpmd.cxx.
+            const hMultiFab &real2_mfab =
+                std::get<hMultiFab>(*groupdata.mfab[tl]);
+            if (is_checkpoint)
+              write_group(rawify_real2(real2_mfab));
+            else
+              write_group(widen_real2_to_float(real2_mfab));
+#else
+            assert(0 && "unreachable: vartype_is_real2 is always false "
+                        "without HAVE_CCTK_REAL2");
+#endif
+          } else if (vartype_is_real4(groupdata.vartype))
             write_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
           else
             write_group(as_mfab_real(*groupdata.mfab[tl]));
