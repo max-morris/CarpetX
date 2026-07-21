@@ -32,6 +32,7 @@ STORAGE: state8_edgey state4_edgey state2_edgey
 STORAGE: state8_edgez state4_edgez state2_edgez
 STORAGE: state8_bc state4_bc state2_bc
 STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol state2_evol rhs2_evol
+STORAGE: scalar8 scalar4 scalar2 array8 array4 array2
 
 SCHEDULE TestReal4_Initialize AT initial
 {
@@ -231,4 +232,44 @@ if (run_evol_test)
     READS: state4_evol(everywhere)
     READS: state2_evol(everywhere)
   } "Check the evolved REAL4, REAL8, and REAL2 states against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
+}
+
+
+
+# =============================================================================
+# Phase 4: grid scalar / grid array sized-real coverage
+# =============================================================================
+#
+# Grid scalars and grid arrays have no AMR structure (no ghost zones, no
+# boundary, no prolongation/restriction/sync), unlike every group above, so
+# this coverage needs neither a SYNC clause nor a postregrid/postrestrict
+# re-sync item: CarpetX marks a freshly allocated group's outer/ghost
+# validity true unconditionally (SetupGlobals, driver.cxx) since there is no
+# such thing as an invalid boundary/ghost zone for these group types, and
+# checkpoint recovery restores a scalar/array group's data in full (there is
+# no separate "interior vs. ghosts" split to re-sync afterwards either).
+#
+# Gated behind run_periodic_test, like the original single-level periodic
+# test above, so it runs (and its PASS lines print) in exactly the parfiles
+# that also run that test -- notably par/testreal4_io.par (after an
+# iteration) and par/testreal4_io_recover.par (after a checkpoint/recovery
+# round trip), which is what this coverage is primarily for.
+
+SCHEDULE TestReal4_ScalarArray_Initialize AT initial
+{
+  LANG: C
+  OPTIONS: global
+  WRITES: scalar8(everywhere) scalar4(everywhere) scalar2(everywhere)
+  WRITES: array8(everywhere) array4(everywhere) array2(everywhere)
+} "Initialize the REAL8, REAL4, and REAL2 grid scalar and grid array test groups with known, exactly-representable-at-every-precision values"
+
+if (run_periodic_test)
+{
+  SCHEDULE TestReal4_ScalarArray_Check AT poststep
+  {
+    LANG: C
+    OPTIONS: global
+    READS: scalar8(everywhere) scalar4(everywhere) scalar2(everywhere)
+    READS: array8(everywhere) array4(everywhere) array2(everywhere)
+  } "Verify the REAL8, REAL4, and REAL2 grid scalar and grid array test groups"
 }

@@ -182,3 +182,32 @@ CCTK_REAL2 rhs2_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
 {
   r2_evol
 } "RHS of state2_evol"
+
+
+
+# =============================================================================
+# Phase 4: grid scalar / grid array sized-real coverage
+# =============================================================================
+#
+# CCTK_SCALAR/CCTK_ARRAY groups at all three sized-REAL precisions
+# (REAL8/REAL4/REAL2), exercising CarpetX's AnyTypeVector-backed grid
+# scalar/array storage (driver.hxx) end-to-end: allocation, poisoning,
+# validity checking, checkpoint/recovery, and I/O output (TSV/openPMD/Silo),
+# complementing the CCTK_GF coverage above. src/testreal4_scalar_array.cxx
+# initializes each group with values that are exact binary fractions (so
+# exactly representable at every precision, including CCTK_REAL2's binary16,
+# with no rounding tolerance needed) and re-verifies them bit-exactly after
+# every iteration -- including, in par/testreal4_io.par and
+# par/testreal4_io_recover.par, across a checkpoint/recovery round trip.
+
+CCTK_REAL8 scalar8 TYPE=scalar "REAL8 grid scalar test value"
+
+CCTK_REAL4 scalar4 TYPE=scalar "REAL4 grid scalar test value"
+
+CCTK_REAL2 scalar2 TYPE=scalar "REAL2 grid scalar test value"
+
+CCTK_REAL8 array8 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL8 grid array test values"
+
+CCTK_REAL4 array4 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL4 grid array test values"
+
+CCTK_REAL2 array2 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL2 grid array test values"

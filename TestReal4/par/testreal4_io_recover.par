@@ -1,14 +1,18 @@
 # Phase 4 self-checking mixed-precision test: checkpoint/recovery leg for
 # par/testreal4_io.par. Recovers the state that parfile checkpointed (via
-# openPMD) at iteration 1, then continues the same single-level periodic
-# self-test (TestReal4_Check, gated by run_periodic_test) for one more
-# iteration -- verifying that the REAL8 (u8), REAL4 (u4), and REAL2 (u2)
-# test states all continue to satisfy the analytic solution after a
-# checkpoint/recovery round trip, i.e. that CarpetX's (now
-# precision-generic) checkpoint/recovery code path preserves REAL4 data
-# correctly, and preserves REAL2 data *bit-exactly* (its raw 16-bit
-# payload, per D6, rather than the widened float32 used for viz-format
-# output below).
+# openPMD) at iteration 1, then continues both of that parfile's self-tests
+# for one more iteration: the single-level periodic self-test
+# (TestReal4_Check, gated by run_periodic_test) and the grid scalar/grid
+# array self-test (TestReal4_ScalarArray_Check, gated by the same
+# run_periodic_test) -- verifying that the REAL8, REAL4, and REAL2 versions
+# of *both* group kinds (grid functions u8/u4/u2, and grid scalars/arrays
+# scalar8/scalar4/scalar2, array8/array4/array2) all continue to hold their
+# expected values after a checkpoint/recovery round trip, i.e. that
+# CarpetX's (now precision-generic and group-kind-generic) checkpoint/
+# recovery code path preserves REAL4 data correctly, and preserves REAL2
+# data *bit-exactly* (its raw 16-bit payload, per D6, rather than the
+# widened float32 used for viz-format output below) for grid functions and
+# grid scalars/arrays alike.
 #
 # NOTE: IO::recover_dir below is a path relative to this run's own working
 # directory (.../mp/testreal4-io-recover/output-0000/, per how `cactup sim
@@ -85,12 +89,24 @@ CarpetX::out_openpmd_vars = "
     TestReal4::state8
     TestReal4::state4
     TestReal4::state2
+    TestReal4::scalar8
+    TestReal4::scalar4
+    TestReal4::scalar2
+    TestReal4::array8
+    TestReal4::array4
+    TestReal4::array2
 "
 
 CarpetX::out_silo_vars = "
     TestReal4::state8
     TestReal4::state4
     TestReal4::state2
+    TestReal4::scalar8
+    TestReal4::scalar4
+    TestReal4::scalar2
+    TestReal4::array8
+    TestReal4::array4
+    TestReal4::array2
 "
 
 CarpetX::out_tsv = yes
@@ -98,6 +114,12 @@ CarpetX::out_tsv_vars = "
     TestReal4::state8
     TestReal4::state4
     TestReal4::state2
+    TestReal4::scalar8
+    TestReal4::scalar4
+    TestReal4::scalar2
+    TestReal4::array8
+    TestReal4::array4
+    TestReal4::array2
 "
 
 # --- Recovery -------------------------------------------------------------
