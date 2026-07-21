@@ -280,6 +280,12 @@ template void
 FillPatch_Sync<fMultiFab>(task_manager &,
                           const GHExt::PatchData::LevelData::GroupData &,
                           fMultiFab &, const Geometry &);
+#ifdef HAVE_CCTK_REAL2
+template void
+FillPatch_Sync<hMultiFab>(task_manager &,
+                          const GHExt::PatchData::LevelData::GroupData &,
+                          hMultiFab &, const Geometry &);
+#endif
 
 template void FillPatch_ProlongateGhosts<MultiFab>(
     task_manager &, task_manager &,
@@ -293,6 +299,14 @@ template void FillPatch_ProlongateGhosts<fMultiFab>(
     const GHExt::PatchData::LevelData::GroupData &, fMultiFab &,
     const fMultiFab &, const Geometry &, const Geometry &,
     InterpolaterT<CCTK_REAL4> *, const Vector<BCRec> &);
+#ifdef HAVE_CCTK_REAL2
+template void FillPatch_ProlongateGhosts<hMultiFab>(
+    task_manager &, task_manager &,
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, hMultiFab &,
+    const hMultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL2> *, const Vector<BCRec> &);
+#endif
 
 template void FillPatch_NewLevel<MultiFab>(
     const GHExt::PatchData::LevelData::GroupData &,
@@ -304,6 +318,13 @@ template void FillPatch_NewLevel<fMultiFab>(
     const GHExt::PatchData::LevelData::GroupData &, fMultiFab &,
     const fMultiFab &, const Geometry &, const Geometry &,
     InterpolaterT<CCTK_REAL4> *, const Vector<BCRec> &);
+#ifdef HAVE_CCTK_REAL2
+template void FillPatch_NewLevel<hMultiFab>(
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, hMultiFab &,
+    const hMultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL2> *, const Vector<BCRec> &);
+#endif
 
 template void FillPatch_RemakeLevel<MultiFab>(
     const GHExt::PatchData::LevelData::GroupData &,
@@ -315,5 +336,12 @@ template void FillPatch_RemakeLevel<fMultiFab>(
     const GHExt::PatchData::LevelData::GroupData &, fMultiFab &,
     const fMultiFab &, const fMultiFab &, const Geometry &, const Geometry &,
     InterpolaterT<CCTK_REAL4> *, const Vector<BCRec> &);
+#ifdef HAVE_CCTK_REAL2
+template void FillPatch_RemakeLevel<hMultiFab>(
+    const GHExt::PatchData::LevelData::GroupData &,
+    const GHExt::PatchData::LevelData::GroupData &, hMultiFab &,
+    const hMultiFab &, const hMultiFab &, const Geometry &, const Geometry &,
+    InterpolaterT<CCTK_REAL2> *, const Vector<BCRec> &);
+#endif
 
 } // namespace CarpetX

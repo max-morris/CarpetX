@@ -2540,6 +2540,15 @@ int SyncGroupsByDirI(const cGH *restrict cctkGH, int numgroups,
                   std::get<amrex::fMultiFab>(*coarsegroupdata.mfab.at(tl)),
                   fgeom, cgeom, groupdata.interpolator_real4,
                   groupdata.bcrecs);
+#ifdef HAVE_CCTK_REAL2
+            } else if (is_real2(*groupdata.mfab.at(tl))) {
+              FillPatch_ProlongateGhosts(
+                  tasks2, tasks3, groupdata, coarsegroupdata,
+                  std::get<hMultiFab>(*groupdata.mfab.at(tl)),
+                  std::get<hMultiFab>(*coarsegroupdata.mfab.at(tl)),
+                  fgeom, cgeom, groupdata.interpolator_real2,
+                  groupdata.bcrecs);
+#endif
             } else {
               FillPatch_ProlongateGhosts(
                   tasks2, tasks3, groupdata, coarsegroupdata,
@@ -2812,7 +2821,45 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
             int rank = 0;
             for (int d = 0; d < dim; ++d)
               rank += groupdata.indextype.at(d);
-            if (vartype_is_real4(groupdata.vartype)) {
+#ifdef HAVE_CCTK_REAL2
+            if (vartype_is_real2(groupdata.vartype)) {
+              // amrex::average_down_edges (AMReX 25.11) has only a
+              // MultiFab-specific (not FAB-templated) overload, unlike
+              // average_down_nodal/average_down/average_down_faces; there
+              // is no way to restrict edge-centered CCTK_REAL2 data with
+              // AMReX 25.11 (same limitation as CCTK_REAL4 below).
+              // average_down_nodal/average_down_faces/average_down
+              // themselves are FAB-templated and were verified to compile
+              // and do their arithmetic correctly for
+              // amrex::BaseFab<CCTK_REAL2> (== amrex::BaseFab<_Float16>), so
+              // no compute-type fallback is needed here (unlike some other
+              // REAL2 numerics sites might require, see D5).
+              if (rank == 1)
+                CCTK_VERROR(
+                    "Edge-centered restriction is not yet supported for "
+                    "CCTK_REAL2 grid function group %s (amrex::"
+                    "average_down_edges is not templated on the FAB type "
+                    "in the installed AMReX version)",
+                    groupdata.groupname.c_str());
+              auto &finemfab = std::get<hMultiFab>(*finegroupdata.mfab.at(tl));
+              auto &crsemfab = std::get<hMultiFab>(*groupdata.mfab.at(tl));
+              switch (rank) {
+              case 0:
+                average_down_nodal(finemfab, crsemfab, reffact);
+                break;
+              case 2:
+                average_down_faces(finemfab, crsemfab, reffact);
+                break;
+              case 3:
+                average_down(finemfab, crsemfab, 0, groupdata.numvars,
+                            reffact);
+                break;
+              default:
+                assert(0);
+              }
+            } else
+#endif
+                if (vartype_is_real4(groupdata.vartype)) {
               // amrex::average_down_edges (AMReX 25.11) has only a
               // MultiFab-specific (not FAB-templated) overload, unlike
               // average_down_nodal/average_down/average_down_faces; there

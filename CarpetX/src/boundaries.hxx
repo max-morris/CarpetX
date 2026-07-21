@@ -34,12 +34,13 @@ using namespace boundaries_detail;
 
 // `BoundaryCondition<T>` applies symmetry and boundary conditions to a
 // single T-typed fab, where T is the grid function's storage element type
-// (CCTK_REAL for REAL/REAL8 groups, CCTK_REAL4 for REAL4 groups). Only the
-// fab data itself (dest, destptr, and the GF3D2 view used in the kernel) is
-// templated on T; coordinates (xmin/xmax/dx) and the dirichlet/robin/
-// reflection constant vectors are read from `groupdata` as CCTK_REAL and are
-// converted to T only at the point where a value is stored into the fab, so
-// that double-precision (T = CCTK_REAL) results are bit-for-bit unchanged.
+// (CCTK_REAL for REAL/REAL8 groups, CCTK_REAL4 for REAL4 groups, CCTK_REAL2
+// for REAL2 groups if HAVE_CCTK_REAL2). Only the fab data itself (dest,
+// destptr, and the GF3D2 view used in the kernel) is templated on T;
+// coordinates (xmin/xmax/dx) and the dirichlet/robin/reflection constant
+// vectors are read from `groupdata` as CCTK_REAL and are converted to T only
+// at the point where a value is stored into the fab, so that
+// double-precision (T = CCTK_REAL) results are bit-for-bit unchanged.
 template <typename T> struct BoundaryCondition {
   const GHExt::PatchData::LevelData::GroupData &groupdata;
   const GHExt::PatchData &patchdata;
@@ -90,6 +91,9 @@ template <typename T> struct BoundaryCondition {
 // boundaries_impl_*.cxx files (see boundaries_impl.hxx).
 extern template struct BoundaryCondition<CCTK_REAL>;
 extern template struct BoundaryCondition<CCTK_REAL4>;
+#ifdef HAVE_CCTK_REAL2
+extern template struct BoundaryCondition<CCTK_REAL2>;
+#endif
 
 } // namespace CarpetX
 

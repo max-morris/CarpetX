@@ -130,9 +130,24 @@ public:
 // templated on the storage precision T (see above) and derives from
 // InterpolaterT<T> rather than from amrex::Interpolater, each table gains a
 // T axis: `name##_table<T>()` returns a reference to a map of
-// InterpolaterT<T>* built (once, on first use) for that T. Both T=CCTK_REAL
-// and T=CCTK_REAL4 are explicitly instantiated in the _impl_*.cxx files
-// (`extern template` here suppresses any other, implicit instantiation).
+// InterpolaterT<T>* built (once, on first use) for that T. T=CCTK_REAL,
+// T=CCTK_REAL4, and (if HAVE_CCTK_REAL2) T=CCTK_REAL2 are explicitly
+// instantiated in the _impl_*.cxx files (`extern template` here suppresses
+// any other, implicit instantiation).
+#ifdef HAVE_CCTK_REAL2
+#define CARPETX_DECLARE_PROLONGATE_TABLE(name)                              \
+  template <typename T>                                                     \
+  const std::map<int, std::array<InterpolaterT<T> *, 8> > &name##_table();  \
+  extern template const std::map<int,                                      \
+                                 std::array<InterpolaterT<CCTK_REAL> *, 8> > \
+      &name##_table<CCTK_REAL>();                                          \
+  extern template const std::map<                                          \
+      int, std::array<InterpolaterT<CCTK_REAL4> *, 8> > &                   \
+      name##_table<CCTK_REAL4>();                                          \
+  extern template const std::map<                                          \
+      int, std::array<InterpolaterT<CCTK_REAL2> *, 8> > &                   \
+      name##_table<CCTK_REAL2>()
+#else
 #define CARPETX_DECLARE_PROLONGATE_TABLE(name)                              \
   template <typename T>                                                     \
   const std::map<int, std::array<InterpolaterT<T> *, 8> > &name##_table();  \
@@ -142,6 +157,7 @@ public:
   extern template const std::map<                                          \
       int, std::array<InterpolaterT<CCTK_REAL4> *, 8> > &                   \
       name##_table<CCTK_REAL4>()
+#endif
 
 // Polynomial (Lagrange) interpolation
 CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_poly_3d_rf2);

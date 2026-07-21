@@ -72,5 +72,9 @@ template const std::map<int, std::array<InterpolaterT<CCTK_REAL> *, 8> > &
 prolongate_cons_3d_rf2_table<CCTK_REAL>();
 template const std::map<int, std::array<InterpolaterT<CCTK_REAL4> *, 8> > &
 prolongate_cons_3d_rf2_table<CCTK_REAL4>();
+#ifdef HAVE_CCTK_REAL2
+template const std::map<int, std::array<InterpolaterT<CCTK_REAL2> *, 8> > &
+prolongate_cons_3d_rf2_table<CCTK_REAL2>();
+#endif
 
 } // namespace CarpetX

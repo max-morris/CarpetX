@@ -28,6 +28,25 @@ constexpr int NEG = -1, INT = 0, POS = +1;
 
 constexpr int maxncomps = 16;
 
+// `std::isnan` has overloads for float/double/long double only; calling it
+// with a bare CCTK_REAL2 (`_Float16`) is ambiguous because all three are
+// equally-good conversion targets. Promote to `float` instead (exact and
+// lossless: every binary16 value, including NaNs, is exactly representable
+// in binary32). Mirrors the identical fix in valid.cxx's check_valid_gf.
+template <typename T>
+CCTK_DEVICE CCTK_HOST inline bool boundaries_isnan(const T &val) {
+#ifdef HAVE_CCTK_REAL2
+  if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+    using std::isnan;
+    return isnan(float(val));
+  } else
+#endif
+  {
+    using std::isnan;
+    return isnan(val);
+  }
+}
+
 template <typename T>
 template <int NI, int NJ, int NK>
 void BoundaryCondition<T>::apply_on_face() const {
@@ -384,16 +403,13 @@ void BoundaryCondition<T>::apply_on_face_symbcxyz(
         const CCTK_REAL reflection_parity = reflection_parities[comp];
         const Loop::GF3D2<T> var(layout, destptr + comp * layout.np);
 
-#ifdef CCTK_DEBUG
-        using std::isnan;
-#endif
         T val;
         if constexpr (any(boundaries == boundary_t::dirichlet)) {
           val = dirichlet_value;
         } else {
           val = var(src);
 #ifdef CCTK_DEBUG
-          assert(!isnan(val));
+          assert(!boundaries_isnan(val));
 #endif
           if constexpr (any(boundaries == boundary_t::robin)) {
             for (int d = 0; d < dim; ++d) {
@@ -424,7 +440,7 @@ void BoundaryCondition<T>::apply_on_face_symbcxyz(
             val *= reflection_parity;
         }
 #ifdef CCTK_DEBUG
-        assert(!isnan(val));
+        assert(!boundaries_isnan(val));
 #endif
         var.store(dst, val);
       }
@@ -447,60 +463,138 @@ void BoundaryCondition<T>::apply_on_face_symbcxyz(
 
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, NEG, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, NEG, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, NEG, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, NEG, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, NEG, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, NEG, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, NEG, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, NEG, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, NEG, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, INT, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, INT, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, INT, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, INT, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, INT, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, INT, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, INT, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, INT, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, INT, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, POS, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, POS, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, POS, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, POS, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, POS, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, POS, NEG>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, POS, NEG>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, POS, NEG>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, POS, NEG>() const;
+#endif
 
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, NEG, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, NEG, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, NEG, INT>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, NEG, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, NEG, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, NEG, INT>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, NEG, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, NEG, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, NEG, INT>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, INT, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, INT, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, INT, INT>() const;
+#endif
 // extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, INT, INT>() const;
 // extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, INT, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, INT, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, INT, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, INT, INT>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, POS, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, POS, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, POS, INT>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, POS, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, POS, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, POS, INT>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, POS, INT>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, POS, INT>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, POS, INT>() const;
+#endif
 
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, NEG, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, NEG, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, NEG, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, NEG, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, NEG, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, NEG, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, NEG, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, NEG, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, NEG, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, INT, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, INT, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, INT, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, INT, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, INT, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, INT, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, INT, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, INT, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, INT, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<NEG, POS, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<NEG, POS, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<NEG, POS, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<INT, POS, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<INT, POS, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<INT, POS, POS>() const;
+#endif
 extern template void BoundaryCondition<CCTK_REAL>::apply_on_face<POS, POS, POS>() const;
 extern template void BoundaryCondition<CCTK_REAL4>::apply_on_face<POS, POS, POS>() const;
+#ifdef HAVE_CCTK_REAL2
+extern template void BoundaryCondition<CCTK_REAL2>::apply_on_face<POS, POS, POS>() const;
+#endif
 
 } // namespace CarpetX
 

@@ -118,5 +118,8 @@ template <typename T> void BoundaryCondition<T>::apply() const {
 
 template struct BoundaryCondition<CCTK_REAL>;
 template struct BoundaryCondition<CCTK_REAL4>;
+#ifdef HAVE_CCTK_REAL2
+template struct BoundaryCondition<CCTK_REAL2>;
+#endif
 
 } // namespace CarpetX

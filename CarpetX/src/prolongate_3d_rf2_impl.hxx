@@ -383,6 +383,114 @@ template <typename T> struct coeffs1d<CC, ENO, /*order*/ 4, T> {
   }};
 };
 
+// D5 (mixed precision, CCTK_REAL2): `coeffs1d<CC, POLY, ORDER, T>::coeffs`
+// (above) builds each ratio as `numerator / T(denominator)`, and for cell
+// centred (CC) polynomial interpolation at order>=6 the denominator alone
+// (e.g. 65536 for order 6, 262144 for order 7 -- see the CC/POLY/6 and
+// CC/POLY/7 specializations above) already exceeds the largest finite
+// CCTK_REAL2 (`_Float16`) value (65504). Converting such a denominator to
+// CCTK_REAL2 before dividing therefore silently overflows to +-infinity,
+// turning the (well within f16 range, e.g. ~-1.64e-3) resulting coefficient
+// into 0. This is only ever exercised by `interp1d<CC, POLY, ORDER>` (see
+// prolongate_3d_rf2_impl_poly.cxx, the only impl file that pairs CC
+// centering with POLY interpolation -- all other families use CONS/ENO,
+// whose coefficients stay well within f16 range at the orders in use); no
+// other interp1d specialization needs this. The fix (minimal, local to that
+// one specialization below): look up the coefficient table and perform the
+// stencil accumulation in a wider "compute type" CT (float) whenever T is
+// CCTK_REAL2, and convert only the single final interpolated value back to
+// T (CCTK_REAL2), which is always representable since interpolation
+// coefficients are O(1) and physically-sized input data is as well.
+#ifdef HAVE_CCTK_REAL2
+template <typename T>
+using prolongate_compute_t =
+    std::conditional_t<std::is_same_v<T, CCTK_REAL2>, float, T>;
+#else
+template <typename T> using prolongate_compute_t = T;
+#endif
+
+// D5 (mixed precision, CCTK_REAL2): `std::isfinite` has no `_Float16`
+// overload, and a bare `_Float16` argument is ambiguous between its
+// `float`/`double`/`long double` overloads (matches the same issue fixed for
+// `std::isnan` in valid.cxx's check_valid_gf). All the `assert(isfinite(x))`
+// debugging checks throughout this file (interp1d's, test_interp1d's, and
+// interp_per_var's/interp_per_group's input/output finiteness checks) route
+// through this helper instead of calling `std::isfinite` directly, promoting
+// to `float` only for CCTK_REAL2 (T is otherwise passed through unchanged,
+// so REAL8/REAL4 behavior -- including precision -- is unaffected).
+template <typename T>
+CCTK_DEVICE CCTK_HOST inline bool prolongate_isfinite(const T &x) {
+#ifdef HAVE_CCTK_REAL2
+  if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+    using std::isfinite;
+    return isfinite(float(x));
+  } else
+#endif
+  {
+    using std::isfinite;
+    return isfinite(x);
+  }
+}
+
+// Same story (no dedicated `_Float16` overload -> ambiguous between
+// `float`/`double`/`long double` when a `using std::fabs` etc. brings all
+// three into scope) for `fabs`/`copysign`/`fmin`/`fmax`, used by
+// `interp1d<CC, MINMOD, 1>` and by the CONS/ENO linear-fallback logic in
+// interp_per_var/interp_per_group. Promote to `float` and narrow back for
+// CCTK_REAL2; pass through unchanged (and thus unambiguous) otherwise.
+template <typename T>
+CCTK_DEVICE CCTK_HOST inline T prolongate_fabs(const T &x) {
+#ifdef HAVE_CCTK_REAL2
+  if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+    using std::fabs;
+    return T(fabs(float(x)));
+  } else
+#endif
+  {
+    using std::fabs;
+    return fabs(x);
+  }
+}
+template <typename T>
+CCTK_DEVICE CCTK_HOST inline T prolongate_copysign(const T &x, const T &y) {
+#ifdef HAVE_CCTK_REAL2
+  if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+    using std::copysign;
+    return T(copysign(float(x), float(y)));
+  } else
+#endif
+  {
+    using std::copysign;
+    return copysign(x, y);
+  }
+}
+template <typename T>
+CCTK_DEVICE CCTK_HOST inline T prolongate_fmin(const T &x, const T &y) {
+#ifdef HAVE_CCTK_REAL2
+  if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+    using std::fmin;
+    return T(fmin(float(x), float(y)));
+  } else
+#endif
+  {
+    using std::fmin;
+    return fmin(x, y);
+  }
+}
+template <typename T>
+CCTK_DEVICE CCTK_HOST inline T prolongate_fmax(const T &x, const T &y) {
+#ifdef HAVE_CCTK_REAL2
+  if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+    using std::fmax;
+    return T(fmax(float(x), float(y)));
+  } else
+#endif
+  {
+    using std::fmax;
+    return fmax(x, y);
+  }
+}
+
 // 1D interpolation operators
 
 template <centering_t CENT, interpolation_t INTP, int ORDER> struct interp1d;
@@ -449,8 +557,7 @@ template <int ORDER> struct interp1d<VC, POLY, ORDER> {
       y += cs[i] * (crse(i - i0) + crse(i1 - i0));
     }
 #ifdef CCTK_DEBUG
-    using std::isfinite;
-    assert(isfinite(y));
+    assert(prolongate_isfinite(y));
 #endif
     return y;
   }
@@ -480,8 +587,14 @@ template <int ORDER> struct interp1d<CC, POLY, ORDER> {
 #ifdef CCTK_DEBUG
     assert(off == 0 || off == 1);
 #endif
+    // See the comment on `prolongate_compute_t` above: for T=CCTK_REAL2 the
+    // coefficient table and stencil sum are computed in CT=float instead
+    // (some CC/POLY coefficient *denominators*, not just the final ratios,
+    // exceed the largest finite _Float16 value at order>=6); only the
+    // returned value is narrowed back to T.
+    using CT = prolongate_compute_t<T>;
     constexpr int N = ORDER + 1;
-    constexpr std::array<T, N> cs = coeffs1d<CC, POLY, ORDER, T>::coeffs;
+    constexpr std::array<CT, N> cs = coeffs1d<CC, POLY, ORDER, CT>::coeffs;
     constexpr int i0 = N / 2;
 
     // nvcc doesn't accept the constexpr terms below
@@ -493,21 +606,20 @@ template <int ORDER> struct interp1d<CC, POLY, ORDER> {
     static_assert(abs0(imax - i0) <= required_ghosts);
 #endif
 
-    T y = 0;
+    CT y = 0;
     if (off == 0)
       for (int i = 0; i < N; ++i)
-        y += cs[i] * crse(i - i0);
+        y += cs[i] * CT(crse(i - i0));
     else
       for (int i = 0; i < N; ++i)
         // For odd orders, the stencil has an even number of points and is
         // thus offset. This offset moves the stencil right by one point
         // when it is reversed.
-        y += cs[ORDER - i] * crse(i - i0 + ORDER % 2);
+        y += cs[ORDER - i] * CT(crse(i - i0 + ORDER % 2));
 #ifdef CCTK_DEBUG
-    using std::isfinite;
-    assert(isfinite(y));
+    assert(prolongate_isfinite(y));
 #endif
-    return y;
+    return T(y);
   }
 };
 
@@ -571,8 +683,7 @@ template <int ORDER> struct interp1d<VC, HERMITE, ORDER> {
       y += cs[i] * (crse(i - i0) + crse(i1 - i0));
     }
 #ifdef CCTK_DEBUG
-    using std::isfinite;
-    assert(isfinite(y));
+    assert(prolongate_isfinite(y));
 #endif
     return y;
   }
@@ -862,16 +973,16 @@ template <> struct interp1d<CC, MINMOD, 1> {
 #endif
     // Inspired by Athena-K's prolongation operator; see
     // <https://github.com/IAS-Astrophysics/athenak/blob/main/src/mesh/prolongation.hpp>
-    using std::copysign, std::fabs, std::fmin;
     const T cval = crse(0);
     const T cval_minus = crse(-1);
     const T cval_plus = crse(+1);
     const T delta_minus = cval - cval_minus;
     const T delta_plus = cval_plus - cval;
     // minmod / 4
-    const T delta =
-        (copysign(T(0.125), delta_minus) + copysign(T(0.125), delta_plus)) *
-        fmin(fabs(delta_minus), fabs(delta_plus));
+    const T delta = (prolongate_copysign(T(0.125), delta_minus) +
+                     prolongate_copysign(T(0.125), delta_plus)) *
+                    prolongate_fmin(prolongate_fabs(delta_minus),
+                                    prolongate_fabs(delta_plus));
     const T sign = off == 0 ? -1 : +1;
     return cval + sign * delta;
   }
@@ -885,36 +996,53 @@ struct test_interp1d;
 template <centering_t CENT, int ORDER, typename T>
 struct test_interp1d<CENT, POLY, ORDER, T> {
   test_interp1d() {
+    // D5 (mixed precision, CCTK_REAL2): this self-test reconstructs, via the
+    // stencil, a synthetic degree-ORDER polynomial sampled on the stencil's
+    // support (offsets up to ~nghosts+1 from the interpolation point) and
+    // checks the two agree exactly. For ORDER==7 (the highest order actually
+    // instantiated, see prolongate_3d_rf2_impl_poly.cxx) that polynomial,
+    // evaluated at the outermost sample points (|x|~5-5.5), reaches
+    // magnitudes (5^7=78125, 5.5^7=152243) that exceed the largest finite
+    // CCTK_REAL2 (`_Float16`, max ~65504) -- for both VC and CC centering,
+    // i.e. independent of the CC/POLY coefficient-table overflow handled in
+    // `interp1d<CC, POLY, ORDER>::operator()` above. This is purely an
+    // artifact of the *verification* polynomial's magnitude, not a defect
+    // in the production interpolation stencil (whose actual coefficients
+    // and physically-sized inputs stay in range) -- so, as in that fix, the
+    // self-test's own arithmetic (building the sample values, evaluating
+    // the reference polynomial, and the returned stencil value) is done in
+    // the wider compute type CT rather than T.
+    using CT = prolongate_compute_t<T>;
     constexpr interp1d<CENT, POLY, ORDER> stencil1d;
     constexpr int nghosts = stencil1d.required_ghosts;
     static_assert(nghosts >= 0);
     constexpr int n = 1 + 2 * (nghosts + 1);
     constexpr int i0 = n / 2;
-    std::array<T, n> ysarr;
-    T *restrict const ys = &ysarr[i0];
+    std::array<CT, n> ysarr;
+    CT *restrict const ys = &ysarr[i0];
 
     for (int order = 0; order <= ORDER; ++order) {
-      auto f = [&](T x) __attribute__((__always_inline__, __flatten__)) {
+      auto f = [&](CT x) __attribute__((__always_inline__, __flatten__)) {
         return pown(x, order);
       };
       for (int off = 0; off < 2; ++off) {
-        const T rmin = stencil1d.stencil_radius(0, off)[0];
-        const T rmax = stencil1d.stencil_radius(0, off)[1];
+        const int rmin = stencil1d.stencil_radius(0, off)[0];
+        const int rmax = stencil1d.stencil_radius(0, off)[1];
         assert(rmin <= 0 && rmin >= -nghosts);
         assert(rmax >= 0 && rmax <= +nghosts);
         for (int i = -(nghosts + 1); i <= +(nghosts + 1); ++i) {
           if (i < rmin || i > rmax) {
-            ys[i] = 0 / T(0);
+            ys[i] = 0 / CT(0);
           } else {
-            T x = i + int(CENT) / T(2);
-            T y = f(x);
+            CT x = i + int(CENT) / CT(2);
+            CT y = f(x);
             ys[i] = y;
           }
         }
 
-        T x = int(CENT) / T(4) + off / T(2);
-        T y = f(x);
-        T y1 = stencil1d(
+        CT x = int(CENT) / CT(4) + off / CT(2);
+        CT y = f(x);
+        CT y1 = stencil1d(
             [&](int i) __attribute__((__always_inline__, __flatten__)) {
               assert(i >= rmin);
               assert(i <= rmax);
@@ -923,8 +1051,7 @@ struct test_interp1d<CENT, POLY, ORDER, T> {
             0, off);
         // We carefully choose the test problem so that round-off
         // cannot be a problem here
-        using std::isfinite;
-        assert(isfinite(y1));
+        assert(prolongate_isfinite(y1));
         assert(y1 == y);
       }
     }
@@ -966,8 +1093,7 @@ template <int ORDER, typename T> struct test_interp1d<VC, HERMITE, ORDER, T> {
             0, off);
         // We carefully choose the test problem so that round-off
         // cannot be a problem here
-        using std::isfinite;
-        assert(isfinite(y1));
+        assert(prolongate_isfinite(y1));
         assert(y1 == y);
       }
     }
@@ -1024,8 +1150,7 @@ template <int ORDER, typename T> struct test_interp1d<CC, CONS, ORDER, T> {
               return ys[i];
             },
             0, off);
-        using std::isfinite;
-        assert(isfinite(y1[off]));
+        assert(prolongate_isfinite(y1[off]));
       } // for off
       // Ensure conservation
       assert(y1[0] / 2 + y1[1] / 2 == ys[0]);
@@ -1097,8 +1222,7 @@ template <int ORDER, typename T> struct test_interp1d<CC, ENO, ORDER, T> {
                 return ys[i0 + 1 + i];
               },
               0, off);
-          using std::isfinite;
-          assert(isfinite(y1[off]));
+          assert(prolongate_isfinite(y1[off]));
         } // for off
         // Ensure conservation
         assert(y1[0] / 2 + y1[1] / 2 == ys[i0 + 1]);
@@ -1159,8 +1283,7 @@ template <typename T> struct test_interp1d<CC, MINMOD, 1, T> {
               return ys[i0 + 1 + i];
             },
             0, off);
-        using std::isfinite;
-        assert(isfinite(y1[off]));
+        assert(prolongate_isfinite(y1[off]));
       } // for off
       // Ensure conservation
       assert(y1[0] / 2 + y1[1] / 2 == ys[i0 + 1]);
@@ -1370,8 +1493,7 @@ void prolongate_3d_rf2<
     amrex::ParallelFor(
         source_region, [=] CCTK_DEVICE(const int i, const int j, const int k)
                            __attribute__((__always_inline__, __flatten__)) {
-                             using std::isfinite;
-                             assert(isfinite(crse(i, j, k)));
+                             assert(prolongate_isfinite(crse(i, j, k)));
                            });
 #endif
 
@@ -1591,11 +1713,12 @@ void prolongate_3d_rf2<
               for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                 for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
                   for (int di = sradi[0]; di <= sradi[1]; ++di) {
-                    using std::fmax, std::fmin;
-                    minval = fmin(minval, crse(icrse[0] + di, icrse[1] + dj,
-                                               icrse[2] + dk));
-                    maxval = fmax(maxval, crse(icrse[0] + di, icrse[1] + dj,
-                                               icrse[2] + dk));
+                    minval = prolongate_fmin(
+                        minval, crse(icrse[0] + di, icrse[1] + dj,
+                                     icrse[2] + dk));
+                    maxval = prolongate_fmax(
+                        maxval, crse(icrse[0] + di, icrse[1] + dj,
+                                     icrse[2] + dk));
                   }
                 }
               }
@@ -1675,8 +1798,7 @@ void prolongate_3d_rf2<
     amrex::ParallelFor(
         target_region, [=] CCTK_DEVICE(const int i, const int j, const int k)
                            __attribute__((__always_inline__, __flatten__)) {
-                             using std::isfinite;
-                             assert(isfinite(fine(i, j, k)));
+                             assert(prolongate_isfinite(fine(i, j, k)));
                            });
 #endif
 
@@ -1814,9 +1936,8 @@ void prolongate_3d_rf2<
   amrex::ParallelFor(
       source_region, [=] CCTK_DEVICE(const int i, const int j, const int k)
                          __attribute__((__always_inline__, __flatten__)) {
-                           using std::isfinite;
                            for (int comp = 0; comp < ncomps; ++comp)
-                             assert(isfinite(crse(i, j, k, comp)));
+                             assert(prolongate_isfinite(crse(i, j, k, comp)));
                          });
 #endif
 
@@ -2013,11 +2134,12 @@ void prolongate_3d_rf2<
               for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                 for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
                   for (int di = sradi[0]; di <= sradi[1]; ++di) {
-                    using std::fmax, std::fmin;
-                    minval = fmin(minval, crse(icrse[0] + di, icrse[1] + dj,
-                                               icrse[2] + dk, comp));
-                    maxval = fmax(maxval, crse(icrse[0] + di, icrse[1] + dj,
-                                               icrse[2] + dk, comp));
+                    minval = prolongate_fmin(
+                        minval, crse(icrse[0] + di, icrse[1] + dj,
+                                     icrse[2] + dk, comp));
+                    maxval = prolongate_fmax(
+                        maxval, crse(icrse[0] + di, icrse[1] + dj,
+                                     icrse[2] + dk, comp));
                   }
                 }
               }
@@ -2153,9 +2275,8 @@ void prolongate_3d_rf2<
   amrex::ParallelFor(
       target_region, [=] CCTK_DEVICE(const int i, const int j, const int k)
                          __attribute__((__always_inline__, __flatten__)) {
-                           using std::isfinite;
                            for (int comp = 0; comp < ncomps; ++comp)
-                             assert(isfinite(fine(i, j, k, comp)));
+                             assert(prolongate_isfinite(fine(i, j, k, comp)));
                          });
 #endif
 
