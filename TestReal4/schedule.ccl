@@ -1,7 +1,34 @@
 # Schedule definitions for thorn TestReal4
+#
+# NOTE on storage and initialization: CarpetX does not support per-group
+# conditional storage. CarpetX::GroupStorageIncrease/Decrease (the
+# CCTK_GroupStorageIncrease/Decrease overloads, schedule.cxx's
+# GroupStorageCrease) are unimplemented no-ops in this driver -- every
+# CCTK_GF group declared in interface.ccl unconditionally receives its full
+# declared number of timelevels on every level and patch, regardless of any
+# "STORAGE:" statement in this file, and regardless of whether that
+# statement sits inside an "if (run_*_test)" block. STORAGE is therefore
+# declared unconditionally below, to reflect that reality rather than
+# imply a gating that cannot actually happen.
+#
+# Because storage for every test group is always present in every parfile,
+# every group must also always be *validly written* (interior, outer
+# boundary, and ghost zones all valid) as soon as it exists -- otherwise
+# CarpetX's validity checking aborts at the very first
+# CycleTimelevels/regrid, even for groups the active parfile never
+# intended to exercise. So the Initialize (and any Sync needed to cover
+# ghosts/the outer boundary) schedule items below are unconditional too,
+# for all four test groups, in every parfile. Only the analysis/
+# verification "Check" schedule items -- which assert a specific test's
+# analytic solution and would be meaningless (or invalid, e.g. wrong
+# domain/centering/boundary assumptions) under another parfile's setup --
+# stay gated behind the matching run_*_test parameter, so each parfile
+# still only checks the test(s) it is set up for.
 
-STORAGE: state8
-STORAGE: state4
+STORAGE: state8 state4
+STORAGE: state8_2lev state4_2lev
+STORAGE: state8_bc state4_bc
+STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol
 
 SCHEDULE TestReal4_Initialize AT initial
 {
@@ -11,15 +38,140 @@ SCHEDULE TestReal4_Initialize AT initial
   SYNC: state4 state8
 } "Initialize REAL4 and REAL8 test states with a periodic analytic function"
 
-SCHEDULE TestReal4_Check AT poststep
+if (run_periodic_test)
 {
-  LANG: C
-  READS: state4(everywhere)
-  READS: state8(everywhere)
-} "Check REAL4 and REAL8 test states everywhere (interior and ghosts), using the GF3D2 accessor family"
+  SCHEDULE TestReal4_Check AT poststep
+  {
+    LANG: C
+    READS: state4(everywhere)
+    READS: state8(everywhere)
+  } "Check REAL4 and REAL8 test states everywhere (interior and ghosts), using the GF3D2 accessor family"
 
-SCHEDULE TestReal4_CheckGF3D5 AT poststep AFTER TestReal4_Check
+  SCHEDULE TestReal4_CheckGF3D5 AT poststep AFTER TestReal4_Check
+  {
+    LANG: C
+    READS: state4(everywhere)
+  } "Re-check the REAL4 test state everywhere, using the GF3D5 accessor family"
+}
+
+
+
+# =============================================================================
+# Phase 2: two-level (regrid + prolongation) test
+# =============================================================================
+
+SCHEDULE TestReal4_2Lev_Initialize AT initial
 {
   LANG: C
-  READS: state4(everywhere)
-} "Re-check the REAL4 test state everywhere, using the GF3D5 accessor family"
+  WRITES: state8_2lev(interior)
+  WRITES: state4_2lev(interior)
+} "Initialize the REAL4 and REAL8 linear test states on the coarse level"
+
+SCHEDULE TestReal4_2Lev_Sync AT initial AFTER TestReal4_2Lev_Initialize
+{
+  LANG: C
+  SYNC: state8_2lev state4_2lev
+} "Sync test data (single level only exists at this point)"
+
+# The two postregrid/postrestrict Sync items below are unconditional
+# (not gated behind run_2lev_test), even though only testreal4_2lev.par
+# actually triggers a regrid (it is the only parfile with max_num_levels >
+# 1 and a BoxInBox region). Regridding creates a new fine level for *every*
+# CCTK_GF group with storage -- which, per the note at the top of this
+# file, is *all* of them, in every parfile -- so every group must be kept
+# validly written across a regrid, not just the group(s) the active
+# parfile is testing. Leaving this gated behind run_2lev_test left every
+# other test group's newly-created fine-level data uninitialized, which
+# CarpetX's validity checking then flagged as invalid at the very next
+# CycleTimelevels, aborting the 2lev test before it ever reached its own
+# Check.
+SCHEDULE TestReal4_2Lev_Sync AT postregrid
+{
+  LANG: C
+  SYNC: state8 state4
+  SYNC: state8_2lev state4_2lev
+  SYNC: state8_bc state4_bc
+  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
+} "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written"
+
+SCHEDULE TestReal4_2Lev_Sync AT postrestrict
+{
+  LANG: C
+  SYNC: state8 state4
+  SYNC: state8_2lev state4_2lev
+  SYNC: state8_bc state4_bc
+  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
+} "Sync all test groups after restriction, for the same reason as the postregrid item above"
+
+if (run_2lev_test)
+{
+  SCHEDULE TestReal4_2Lev_Check AT analysis
+  {
+    LANG: C
+    READS: state8_2lev(everywhere)
+    READS: state4_2lev(everywhere)
+  } "Verify the REAL4 and REAL8 linear test states against the analytic function on every active refinement level, including ghost zones filled by prolongation"
+}
+
+
+
+# =============================================================================
+# Phase 2: physical (dirichlet) boundary condition test
+# =============================================================================
+
+SCHEDULE TestReal4_BC_Initialize AT initial
+{
+  LANG: C
+  WRITES: state8_bc(interior)
+  WRITES: state4_bc(interior)
+  SYNC: state8_bc state4_bc
+} "Initialize the REAL4 and REAL8 boundary-condition test states, then sync to apply the physical (dirichlet) boundary conditions"
+
+if (run_bc_test)
+{
+  SCHEDULE TestReal4_BC_Check AT poststep
+  {
+    LANG: C
+    READS: state8_bc(everywhere)
+    READS: state4_bc(everywhere)
+  } "Verify that the outer-boundary (dirichlet) ghost points carry the configured dirichlet value, for both precisions"
+}
+
+
+
+# =============================================================================
+# Phase 2: ODESolvers evolution smoke test
+# =============================================================================
+
+SCHEDULE TestReal4_Evol_Initial AT initial
+{
+  LANG: C
+  WRITES: state8_evol(everywhere)
+  WRITES: state4_evol(everywhere)
+  WRITES: rhs8_evol(everywhere)
+  WRITES: rhs4_evol(everywhere)
+} "Initialize the REAL4 and REAL8 exponential-decay ODE states to u0 (and their rhs groups to 0, so that storage CarpetX always grants is always validly written)"
+
+if (run_evol_test)
+{
+  SCHEDULE TestReal4_Evol_PostStep IN ODESolvers_PostStep
+  {
+    LANG: C
+    OPTIONS: global
+    SYNC: state8_evol state4_evol
+  } "Synchronize the ODE states after each ODESolvers (sub)step"
+
+  SCHEDULE TestReal4_Evol_RHS IN ODESolvers_RHS
+  {
+    LANG: C
+    READS: state8_evol(everywhere), state4_evol(everywhere)
+    WRITES: rhs8_evol(everywhere), rhs4_evol(everywhere)
+  } "Calculate RHS = -decay_rate * state for both precisions"
+
+  SCHEDULE TestReal4_Evol_Check AT poststep
+  {
+    LANG: C
+    READS: state8_evol(everywhere)
+    READS: state4_evol(everywhere)
+  } "Check the evolved REAL4 and REAL8 states against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
+}

@@ -23,3 +23,72 @@ CCTK_REAL4 state4 TYPE=gf
 {
   u4
 } "REAL4 (float) mixed-precision test state"
+
+
+
+# --- Phase 2: two-level (regrid + prolongation) test -----------------------
+#
+# Vertex-centred (default centering, matching state8/state4 above) so that
+# CarpetX::prolongation_type = "interpolate" or "natural" with
+# CarpetX::prolongation_order = 1 reproduces a linear function of the
+# coordinates exactly (up to floating-point roundoff), for both precisions.
+# The dirichlet_values tag is only exercised when the owning parfile also
+# sets CarpetX::boundary_x etc. to "dirichlet"; par/testreal4_2lev.par
+# excludes points near the outer physical boundary from the check, so the
+# actual constant is not significant.
+
+CCTK_REAL8 state8_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
+{
+  u8_2lev
+} "REAL8 linear test state for the two-level regrid+prolongation test"
+
+CCTK_REAL4 state4_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
+{
+  u4_2lev
+} "REAL4 linear test state for the two-level regrid+prolongation test"
+
+
+
+# --- Phase 2: physical boundary condition test ------------------------------
+#
+# Cell-centred, to also exercise the CC boundary condition code path (the
+# two-level test above exercises VC). The dirichlet_values tag values below
+# must match the constants hardcoded in src/testreal4_bc.cxx.
+
+CCTK_REAL8 state8_bc TYPE=gf CENTERING={CCC} TAGS='dirichlet_values={7.0}'
+{
+  u8_bc
+} "REAL8 test state for verifying dirichlet physical boundary conditions"
+
+CCTK_REAL4 state4_bc TYPE=gf CENTERING={CCC} TAGS='dirichlet_values={4.25}'
+{
+  u4_bc
+} "REAL4 test state for verifying dirichlet physical boundary conditions"
+
+
+
+# --- Phase 2: ODESolvers evolution smoke test -------------------------------
+#
+# du/dt = -decay_rate * u, solved for both precisions independently (each
+# (state, rhs) pair keeps its own precision throughout, per ODESolvers'
+# mixed-precision statecomp_t support).
+
+CCTK_REAL8 state8_evol TYPE=gf CENTERING={CCC} TAGS='rhs="TestReal4::rhs8_evol"'
+{
+  u8_evol
+} "REAL8 exponential-decay ODE state (du/dt = -decay_rate u)"
+
+CCTK_REAL8 rhs8_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
+{
+  r8_evol
+} "RHS of state8_evol"
+
+CCTK_REAL4 state4_evol TYPE=gf CENTERING={CCC} TAGS='rhs="TestReal4::rhs4_evol"'
+{
+  u4_evol
+} "REAL4 exponential-decay ODE state (du/dt = -decay_rate u)"
+
+CCTK_REAL4 rhs4_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
+{
+  r4_evol
+} "RHS of state4_evol"

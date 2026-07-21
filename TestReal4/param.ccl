@@ -1,5 +1,43 @@
 # Parameter definitions for thorn TestReal4
 #
-# No steerable parameters are needed: the analytic test function and its
-# tolerances are fixed in the source code so that the test is fully
-# self-contained.
+# The analytic test functions and their tolerances are fixed in the source
+# code so that each test is fully self-contained; only which of the tests
+# in this thorn are active is steered via the parameters below.
+#
+# TestReal4 is a single thorn shared by four independent parfiles
+# (par/testreal4.par, par/testreal4_2lev.par, par/testreal4_bc.par,
+# par/testreal4_evol.par), each exercising a different Phase of CarpetX's
+# mixed-precision support with a different grid/boundary/level setup. Since
+# a thorn's schedule.ccl is unconditional, every parfile that activates
+# TestReal4 would otherwise run *all* of these self-checks together, even
+# though (e.g.) the original single-level periodic self-test assumes
+# periodic boundaries and a single refinement level, which the other
+# parfiles' setups do not provide. These booleans, combined with `SCHEDULE
+# ... IF` clauses in schedule.ccl, let each parfile enable only the test(s)
+# it is set up for.
+
+BOOLEAN run_periodic_test "Run the original single-level periodic ghost-sync self-test (state8/state4, TestReal4_Initialize/_Check/_CheckGF3D5)"
+{
+} "yes"
+
+BOOLEAN run_2lev_test "Run the two-level regrid+prolongation self-test (state8_2lev/state4_2lev)"
+{
+} "no"
+
+BOOLEAN run_bc_test "Run the physical (dirichlet) boundary condition self-test (state8_bc/state4_bc)"
+{
+} "no"
+
+BOOLEAN run_evol_test "Run the ODESolvers evolution smoke test (state8_evol/state4_evol)"
+{
+} "no"
+
+CCTK_REAL evol_decay_rate "Decay rate lambda in du/dt = -lambda u for the evolution smoke test"
+{
+  (0:* :: "any positive rate"
+} 1.0
+
+CCTK_REAL evol_u0 "Initial value u(t=0) for the evolution smoke test"
+{
+  *:* :: "any value"
+} 1.0

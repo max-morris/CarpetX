@@ -1,0 +1,52 @@
+# Phase 2 self-checking mixed-precision test: ODESolvers evolution smoke
+# test. Two independent exponential-decay ODEs (du/dt = -decay_rate u) are
+# evolved by ODESolvers using RK4, one held as a REAL8 grid function and the
+# other as a REAL4 grid function, exercising ODESolvers::statecomp_t's
+# per-group mixed-precision support (each (state, rhs) pair keeps its own
+# element type throughout the lincomb/combine_valids kernels). Modeled on
+# TestODESolvers/test/test-rk4.par (single-cell unigrid domain, periodic so
+# that no physical boundary condition is needed for this trivial ODE).
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    ODESolvers
+    TestReal4
+"
+
+Cactus::cctk_show_schedule = "no"
+Cactus::presync_mode = "mixed-error"
+
+CarpetX::verbose = "no"
+CarpetX::poison_undefined_values = "yes"
+
+CarpetX::ncells_x = 1
+CarpetX::ncells_y = 1
+CarpetX::ncells_z = 1
+
+CarpetX::blocking_factor_x = 1
+CarpetX::blocking_factor_y = 1
+CarpetX::blocking_factor_z = 1
+
+CarpetX::ghost_size = 0
+
+Driver::periodic = "yes"
+Driver::periodic_x = "yes"
+Driver::periodic_y = "yes"
+Driver::periodic_z = "yes"
+
+CarpetX::dtfac = 0.001
+Cactus::cctk_itlast = 50
+
+ODESolvers::method = "RK4"
+
+TestReal4::evol_decay_rate = 1.0
+TestReal4::evol_u0 = 1.0
+
+# This parfile activates TestReal4's evolution smoke test only.
+TestReal4::run_periodic_test = "no"
+TestReal4::run_2lev_test = "no"
+TestReal4::run_bc_test = "no"
+TestReal4::run_evol_test = "yes"
+
+# No file output.
