@@ -1552,17 +1552,17 @@ template <typename T> inline constexpr bool is_GF3D5_v = is_GF3D5<T>::value;
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T> struct GF3D5vector {
-  static_assert((std::is_same_v<T, amrex::Real>));
   typedef T value_type;
   GF3D5layout layout;
 
-  amrex::FArrayBox fab;
+  amrex::BaseFab<T> fab;
 
 private:
-  static amrex::FArrayBox make_fab(const GF3D5layout &layout, const int nvars) {
+  static amrex::BaseFab<T> make_fab(const GF3D5layout &layout,
+                                    const int nvars) {
     const amrex::Box box(amrex::IntVect(0, 0, 0),
                          amrex::IntVect(layout.np - 1, 0, 0));
-    return amrex::FArrayBox(box, nvars, amrex::The_Async_Arena());
+    return amrex::BaseFab<T>(box, nvars, amrex::The_Async_Arena());
   }
 
 public:
