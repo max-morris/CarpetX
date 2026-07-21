@@ -51,4 +51,10 @@ CarpetX::reflection_upper_x = "no"
 CarpetX::reflection_upper_y = "no"
 CarpetX::reflection_upper_z = "no"
 
+# Exercise the parfile-parsing path for a CCTK_REAL2 param.ccl parameter:
+# steer check_tolerance2 away from its param.ccl default (0.00390625 =
+# 2^-8) to another exact power of two (0.0078125 = 2^-7), which
+# src/testreal4.cxx's TestReal4_Check verifies it received bit-exactly.
+TestReal4::check_tolerance2 = 0.0078125
+
 # No file output.

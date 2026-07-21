@@ -127,6 +127,8 @@ IO::checkpoint_on_terminate = yes
 
 # This parfile activates TestReal4's original periodic self-test only.
 TestReal4::run_periodic_test = "yes"
+# TestReal4_Check hard-verifies this exact parfile-steered CCTK_REAL2 value
+TestReal4::check_tolerance2 = 0.0078125
 TestReal4::run_2lev_test = "no"
 TestReal4::run_bc_test = "no"
 TestReal4::run_evol_test = "no"

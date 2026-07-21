@@ -79,6 +79,12 @@ extern "C" void CarpetX_SolvePoisson(const CCTK_INT gi_sol,
          vartype_is_real4(leveldata.groupdata.at(gi_res)->vartype)))
       CCTK_VERROR("The Poisson solver is not yet supported for CCTK_REAL4 "
                  "grid function groups");
+    if (vartype_is_real2(groupdata_rhs.vartype) ||
+        vartype_is_real2(groupdata_sol.vartype) ||
+        (have_res &&
+         vartype_is_real2(leveldata.groupdata.at(gi_res)->vartype)))
+      CCTK_VERROR("The Poisson solver is not yet supported for CCTK_REAL2 "
+                 "grid function groups");
     rhss.at(level) = &as_mfab_real(*groupdata_rhs.mfab.at(tl));
     sols.at(level) = &as_mfab_real(*groupdata_sol.mfab.at(tl));
     if (have_res) {

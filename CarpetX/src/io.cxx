@@ -320,6 +320,15 @@ void OutputPlotfile(const cGH *restrict cctkGH) {
                     groupdata0.groupname.c_str());
         continue;
       }
+      if (vartype_is_real2(groupdata0.vartype)) {
+        static std::set<int> warned_groups;
+        if (warned_groups.insert(gi).second)
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                    "Plotfile output is not yet supported for CCTK_REAL2 "
+                    "grid function group %s, skipping",
+                    groupdata0.groupname.c_str());
+        continue;
+      }
       const int tl = 0;
 
       std::string groupname = CCTK_FullGroupName(gi);

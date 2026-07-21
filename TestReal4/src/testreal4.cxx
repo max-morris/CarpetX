@@ -12,6 +12,7 @@
 #include <cctk_Parameters.h>
 
 #include <cmath>
+#include <type_traits>
 
 namespace TestReal4 {
 
@@ -69,9 +70,25 @@ extern "C" void TestReal4_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_Check;
   DECLARE_CCTK_PARAMETERS;
 
+  // Compile-time proof that DECLARE_CCTK_PARAMETERS binds each sized-REAL
+  // param.ccl parameter at exactly its declared width, not merely to a
+  // value that happens to convert correctly at runtime.
+  static_assert(std::is_same_v<std::remove_const_t<std::remove_reference_t<
+                                    decltype(check_tolerance8)>>,
+                                CCTK_REAL8>);
+  static_assert(std::is_same_v<std::remove_const_t<std::remove_reference_t<
+                                    decltype(check_tolerance4)>>,
+                                CCTK_REAL4>);
+  static_assert(std::is_same_v<std::remove_const_t<std::remove_reference_t<
+                                    decltype(check_tolerance2)>>,
+                                CCTK_REAL2>);
+
   using std::abs;
 
-  // Type-appropriate tolerances: the analytic function is evaluated with
+  // Type-appropriate tolerances, taken from param.ccl (check_tolerance8/4/2)
+  // rather than hardcoded, so this test also exercises the sized-REAL
+  // parameter machinery end-to-end (parsed, range-checked, stored, and
+  // bound at its declared width): the analytic function is evaluated with
   // different floating-point operations (and hence different rounding) at
   // Initialize time (device loop) than at Check time (host loop), and at a
   // ghost point's own (extrapolated) coordinate rather than at its
@@ -80,9 +97,26 @@ extern "C" void TestReal4_Check(CCTK_ARGUMENTS) {
   // CCTK_REAL2's tolerance is loosest by far: binary16 has only 10
   // mantissa bits (machine epsilon ~9.77e-4), so even a single rounding
   // step can move the amplitude-~1.5-scaled result by a few times 1e-3.
-  constexpr CCTK_REAL8 tolerance8 = 1.0e-9;
-  constexpr CCTK_REAL4 tolerance4 = 1.0e-6f;
-  constexpr CCTK_REAL8 tolerance2 = 3.0e-3;
+  const CCTK_REAL8 tolerance8 = check_tolerance8;
+  const CCTK_REAL4 tolerance4 = check_tolerance4;
+  const CCTK_REAL8 tolerance2 = double(check_tolerance2);
+
+  // par/testreal4.par explicitly steers check_tolerance2 away from its
+  // param.ccl default (0.00390625 = 2^-8) to 0.0078125 (2^-7); both values
+  // are exact powers of two, hence exactly representable in binary16, so
+  // the value read back here from the parameter database (after having
+  // gone through param.ccl's range check and CCTK_REAL2 storage) must
+  // match the parfile's override bit-for-bit -- proving the
+  // parfile-parsing path round-trips a CCTK_REAL2 parameter correctly, not
+  // just approximately. (Every parfile that enables run_periodic_test --
+  // testreal4.par, testreal4_io.par, testreal4_io_recover.par -- must set
+  // check_tolerance2 = 0.0078125 explicitly to match this check.)
+  if (CCTK_REAL2(check_tolerance2) != CCTK_REAL2(0.0078125))
+    CCTK_VERROR(
+        "TestReal4: check_tolerance2 = %.9g, expected the parfile-steered "
+        "value 0.0078125 (2^-7) -- the CCTK_REAL2 parameter did not "
+        "round-trip through par/testreal4.par correctly",
+        double(check_tolerance2));
 
   int n_checked = 0;
 

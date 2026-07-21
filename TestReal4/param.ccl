@@ -41,3 +41,33 @@ CCTK_REAL evol_u0 "Initial value u(t=0) for the evolution smoke test"
 {
   *:* :: "any value"
 } 1.0
+
+# --- Sized-REAL parameter coverage -------------------------------------
+#
+# TestReal4_Check (src/testreal4.cxx) uses these -- instead of hardcoded
+# per-precision constexpr tolerances -- as the pass/fail thresholds for the
+# state8/state4/state2 periodic self-test, exercising CCTK_REAL8,
+# CCTK_REAL4, and CCTK_REAL2 param.ccl parameters end-to-end (parsed,
+# range-checked, stored, and bound via DECLARE_CCTK_PARAMETERS at their
+# declared width).
+#
+# check_tolerance2's default and par/testreal4.par's override are both
+# exact powers of two (hence exactly representable in binary16, with no
+# rounding introduced by storing them as a CCTK_REAL2), so
+# TestReal4_Check can also bit-exactly verify the *specific* overridden
+# value it received back from the parameter database, proving the
+# parfile-parsing path for a CCTK_REAL2 parameter round-trips correctly.
+CCTK_REAL8 check_tolerance8 "Pass/fail tolerance for state8::u8 in the periodic self-test (TestReal4_Check)"
+{
+  (0:1] :: "any positive tolerance, at most 1"
+} 1.0e-9
+
+CCTK_REAL4 check_tolerance4 "Pass/fail tolerance for state4::u4 in the periodic self-test (TestReal4_Check)"
+{
+  (0:1] :: "any positive tolerance, at most 1"
+} 1.0e-6
+
+CCTK_REAL2 check_tolerance2 "Pass/fail tolerance for state2::u2 in the periodic self-test (TestReal4_Check); default and par/testreal4.par's override are both exact powers of two"
+{
+  (0:1] :: "any positive tolerance, at most 1"
+} 0.00390625
