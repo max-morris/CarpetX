@@ -1587,4 +1587,34 @@ using CCTK_BOOLVEC8 = CCTK_BOOLVEC;
 using CCTK_REAL8VEC = CCTK_REALVEC;
 constexpr std::size_t CCTK_VECSIZE8 = CCTK_VECSIZE;
 
+// D8: no CCTK_REAL2VEC/CCTK_BOOLVEC2/CCTK_VECSIZE2 alias.
+//
+// CCTK_REAL2 is `_Float16` (D1). CCTK_REAL4VEC/CCTK_REAL8VEC above are
+// `Arith::simd<T>`, which (with SIMD_DISABLE undefined, as in this build)
+// stores its elements in an `nsimd::pack<T>` and forwards all arithmetic
+// to nsimd's own operators. A standalone probe
+// (/home/max/.claude-personal/jobs/fe8c01e1/tmp/probe_simd2/probe_simd2.cxx,
+// compiled both directly against nsimd::pack<_Float16> and through
+// Arith::simd<_Float16> exactly as CCTK_REAL2VEC would be defined here)
+// confirms this does not compile: nsimd's own f16 type is, on this
+// x86-64 build (no ARM/CUDA/ROCm/SYCL native-fp16 macro defined),
+// `typedef struct { u16 u; } f16` -- an opaque wrapper struct, not
+// `_Float16` -- and nsimd's `simd_traits<T, SimdExt>` template is only
+// specialized for nsimd's own fixed set of scalar typedefs (i8/u8/.../
+// f16/f32/f64), not for the compiler's native `_Float16`. Instantiating
+// `nsimd::pack<_Float16>` therefore fails with "no type named
+// 'simd_vector' in 'struct nsimd::simd_traits<_Float16, nsimd::cpu>'",
+// and by extension so does `Arith::simd<_Float16>` (see
+// probe_simd2.log in that directory for the full compiler output from
+// both instantiations).
+//
+// Per D8, the alias is therefore omitted rather than added in a
+// non-compiling (or silently-wrong, had some accidental conversion made
+// it compile) form. CarpetX's REAL2 kernels use scalar CCTK_REAL2
+// (`_Float16`) arithmetic directly instead, which is acceptable for
+// parity (D8): `_Float16` arithmetic is software-promoted to `float` by
+// GCC >= 12 on x86-64 regardless, so scalar CCTK_REAL2 code already gets
+// the same underlying float instructions per element that a (hypothetical)
+// vectorized path would merely batch together.
+
 #endif // #ifndef CARPETX_ARITH_SIMD_HXX

@@ -82,8 +82,8 @@ struct statecomp_t {
 
   std::vector<CarpetX::GHExt::PatchData::LevelData::GroupData *> groupdatas;
   // One AnyMultiFab per group; a single statecomp_t can mix groups of
-  // different precision (CCTK_REAL vs CCTK_REAL4), each group's data
-  // staying in its own precision throughout.
+  // different precision (CCTK_REAL vs CCTK_REAL4 vs CCTK_REAL2), each
+  // group's data staying in its own precision throughout.
   std::vector<CarpetX::AnyMultiFab *> mfabs;
 
   static void init_tmp_mfabs();
@@ -272,6 +272,10 @@ statecomp_t statecomp_t::copy(const CarpetX::valid_t where) const {
     CarpetX::AnyMultiFab *const y = groupdata->alloc_tmp_mfab();
     assert(CarpetX::is_real4(*y) ==
            CarpetX::vartype_is_real4(groupdata->vartype));
+#ifdef HAVE_CCTK_REAL2
+    assert(CarpetX::is_real2(*y) ==
+           CarpetX::vartype_is_real2(groupdata->vartype));
+#endif
     result.groupdatas.push_back(groupdata);
     result.mfabs.push_back(y);
   }
@@ -292,11 +296,16 @@ statecomp_t statecomp_t::copy(const CarpetX::valid_t where) const {
 namespace detail {
 
 // The actual per-group lincomb kernel, templated on the AMReX multifab type
-// (amrex::MultiFab or amrex::fMultiFab). `MF::value_type` is the underlying
-// element type T (CCTK_REAL or CCTK_REAL4). For T = CCTK_REAL this produces
-// bit-identical code to the original (pre-mixed-precision) implementation,
-// since `T(x)` is a no-op when T already is CCTK_REAL: 'scale' and 'factors'
-// remain CCTK_REAL and are only narrowed to T at the point of use.
+// (amrex::MultiFab, amrex::fMultiFab, or CarpetX::hMultiFab). `MF::value_type`
+// is the underlying element type T (CCTK_REAL, CCTK_REAL4, or CCTK_REAL2).
+// For T = CCTK_REAL this produces bit-identical code to the original
+// (pre-mixed-precision) implementation, since `T(x)` is a no-op when T
+// already is CCTK_REAL: 'scale' and 'factors' remain CCTK_REAL and are only
+// narrowed to T at the point of use. For T = CCTK_REAL2 (_Float16), `T(x)`
+// narrows via the usual (software-promoted) float->_Float16 conversion; the
+// per-element arithmetic below (`+=`, `*`) likewise relies on the compiler's
+// promotion of _Float16 to a wider type internally, so no separate
+// compute-type indirection is needed here.
 template <typename MF, std::size_t N>
 void lincomb_body(const CCTK_REAL scale,
                   const std::array<CCTK_REAL, N> &factors, MF &dstmfab,
@@ -487,8 +496,14 @@ void statecomp_t::lincomb(const statecomp_t &dst, const CCTK_REAL scale,
     const bool is_real4 = CarpetX::is_real4(*dst.mfabs.at(m));
     const auto ncomp = ncomp_of(dst.mfabs.at(m));
     const auto ngrowvect = ngrowvect_of(dst.mfabs.at(m));
+#ifdef HAVE_CCTK_REAL2
+    const bool is_real2 = CarpetX::is_real2(*dst.mfabs.at(m));
+#endif
     for (std::size_t n = 0; n < N; ++n) {
       assert(CarpetX::is_real4(*srcs[n]->mfabs.at(m)) == is_real4);
+#ifdef HAVE_CCTK_REAL2
+      assert(CarpetX::is_real2(*srcs[n]->mfabs.at(m)) == is_real2);
+#endif
       assert(ncomp_of(srcs[n]->mfabs.at(m)) == ncomp);
       assert(ngrowvect_of(srcs[n]->mfabs.at(m)) == ngrowvect);
     }
@@ -520,7 +535,23 @@ void statecomp_t::lincomb(const statecomp_t &dst, const CCTK_REAL scale,
                            tasks
 #endif
       );
-    } else {
+    }
+#ifdef HAVE_CCTK_REAL2
+    else if (CarpetX::is_real2(*dst.mfabs.at(m))) {
+      CarpetX::hMultiFab &dstmfab =
+          std::get<CarpetX::hMultiFab>(*dst.mfabs.at(m));
+      std::array<const CarpetX::hMultiFab *, N> srcmfabs;
+      for (std::size_t n = 0; n < N; ++n)
+        srcmfabs[n] = &std::get<CarpetX::hMultiFab>(*srcs[n]->mfabs.at(m));
+      detail::lincomb_body(scale, factors, dstmfab, srcmfabs, read_dst
+#ifndef AMREX_USE_GPU
+                           ,
+                           tasks
+#endif
+      );
+    }
+#endif
+    else {
       amrex::MultiFab &dstmfab = std::get<amrex::MultiFab>(*dst.mfabs.at(m));
       std::array<const amrex::MultiFab *, N> srcmfabs;
       for (std::size_t n = 0; n < N; ++n)
@@ -781,12 +812,14 @@ extern "C" void ODESolvers_Solve(CCTK_ARGUMENTS) {
         // A group's var/rhs/tmp storage always shares one precision; the
         // variable group and its RHS group must therefore agree, even
         // though different (var, rhs) group pairs in the same state may
-        // each be CCTK_REAL or CCTK_REAL4 independently.
+        // each be CCTK_REAL, CCTK_REAL4, or CCTK_REAL2 independently.
         if (CarpetX::vartype_is_real4(groupdata.vartype) !=
-            CarpetX::vartype_is_real4(rhs_groupdata.vartype))
+                CarpetX::vartype_is_real4(rhs_groupdata.vartype) ||
+            CarpetX::vartype_is_real2(groupdata.vartype) !=
+                CarpetX::vartype_is_real2(rhs_groupdata.vartype))
           CCTK_VERROR("ODESolvers: variable group %s and its RHS group %s "
                      "must have the same precision (CCTK_REAL vs "
-                     "CCTK_REAL4)",
+                     "CCTK_REAL4 vs CCTK_REAL2)",
                      groupdata.groupname.c_str(),
                      rhs_groupdata.groupname.c_str());
         var.groupdatas.push_back(&groupdata);

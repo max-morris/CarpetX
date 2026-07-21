@@ -130,9 +130,10 @@ MPI_Datatype reduction_mpi_datatype_CCTK_REAL();
 MPI_Op reduction_mpi_op();
 
 // Reduce grid function variable `vi` of group `gi`, time level `tl`. Works
-// for both CCTK_REAL/REAL8 (double) and CCTK_REAL4 (float) groups: REAL4
-// source data is read as float and accumulated (and MPI-reduced) in double,
-// so the result type is always reduction<CCTK_REAL, dim> regardless of the
+// for CCTK_REAL/REAL8 (double), CCTK_REAL4 (float), and CCTK_REAL2
+// (_Float16, when HAVE_CCTK_REAL2) groups: REAL4/REAL2 source data is read
+// in its native precision and accumulated (and MPI-reduced) in double, so
+// the result type is always reduction<CCTK_REAL, dim> regardless of the
 // group's storage precision (see reduce_typed<MF> in reduction.cxx).
 reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl);
 

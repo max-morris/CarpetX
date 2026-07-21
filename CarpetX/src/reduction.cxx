@@ -81,10 +81,11 @@ MPI_Op reduction_mpi_op() {
 
 namespace {
 // Templated on the *source* array element type SrcT (CCTK_REAL for
-// REAL/REAL8 groups, CCTK_REAL4 for CCTK_REAL4 groups). The accumulator
-// always uses CCTK_REAL, i.e. CCTK_REAL4 source data is read and summed in
-// double precision; the reduction result type is therefore unchanged by the
-// group's storage precision.
+// REAL/REAL8 groups, CCTK_REAL4 for CCTK_REAL4 groups, CCTK_REAL2 for
+// CCTK_REAL2 groups). The accumulator always uses CCTK_REAL, i.e. CCTK_REAL4
+// / CCTK_REAL2 source data is read and summed in double precision; the
+// reduction result type is therefore unchanged by the group's storage
+// precision.
 template <typename SrcT>
 reduction<CCTK_REAL, dim>
 reduce_array(const amrex::Array4<const SrcT> &restrict vars, const int n,
@@ -161,11 +162,11 @@ reduce_array(const amrex::Array4<const SrcT> &restrict vars, const int n,
 }
 
 // Templated on the AMReX FabArray specialization MF (amrex::MultiFab for
-// REAL/REAL8 groups, amrex::fMultiFab for CCTK_REAL4 groups; same pattern as
-// fillpatch.hxx's FillPatch_* functions). The source element type is
-// `typename MF::value_type`; the reduction result is always accumulated (and
-// MPI-reduced) in CCTK_REAL, so this returns the same result type for both
-// storage precisions.
+// REAL/REAL8 groups, amrex::fMultiFab for CCTK_REAL4 groups, hMultiFab for
+// CCTK_REAL2 groups; same pattern as fillpatch.hxx's FillPatch_* functions).
+// The source element type is `typename MF::value_type`; the reduction result
+// is always accumulated (and MPI-reduced) in CCTK_REAL, so this returns the
+// same result type for all storage precisions.
 template <typename MF>
 reduction<CCTK_REAL, dim> reduce_typed(int gi, int vi, int tl) {
   using SrcT = typename MF::value_type;
@@ -273,9 +274,14 @@ reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
   assert(group.grouptype == CCTK_GF);
 
   // Dispatch on the group's storage precision. The source array element
-  // type differs (CCTK_REAL4 vs. CCTK_REAL), but the accumulator and
-  // MPI-reduced result always use CCTK_REAL (see reduce_typed above), so the
-  // returned reduction<CCTK_REAL, dim> is identical in shape for both.
+  // type differs (CCTK_REAL4/CCTK_REAL2 vs. CCTK_REAL), but the accumulator
+  // and MPI-reduced result always use CCTK_REAL (see reduce_typed above), so
+  // the returned reduction<CCTK_REAL, dim> is identical in shape for all
+  // precisions.
+#ifdef HAVE_CCTK_REAL2
+  if (vartype_is_real2(group.vartype))
+    return reduce_typed<hMultiFab>(gi, vi, tl);
+#endif
   if (vartype_is_real4(group.vartype))
     return reduce_typed<amrex::fMultiFab>(gi, vi, tl);
   return reduce_typed<amrex::MultiFab>(gi, vi, tl);

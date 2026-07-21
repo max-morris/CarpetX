@@ -65,8 +65,13 @@ template <typename T, int order, int centering> struct interpolator {
   }
 
   static constexpr T eps() {
+    // std::pow has no _Float16 overload, and a bare _Float16 argument
+    // converts ambiguously to its float/double/long double overloads (same
+    // issue as std::isnan, see valid.cxx); compute in float and narrow to T
+    // (a no-op for T=CCTK_REAL/CCTK_REAL4, a narrowing float->_Float16 for
+    // T=CCTK_REAL2).
     using std::pow;
-    return pow(std::numeric_limits<T>::epsilon(), T(3) / 4);
+    return T(pow(float(std::numeric_limits<T>::epsilon()), float(3) / 4));
   }
 
   // TODO: Check whether interpolated variables are valid
@@ -82,20 +87,25 @@ template <typename T, int order, int centering> struct interpolator {
 #endif
     const T val = vars(j, vi);
 #ifdef CCTK_DEBUG
+    // std::isfinite/operator<< have no _Float16 overload, and a bare
+    // _Float16 argument converts ambiguously to their float/double/long
+    // double overloads (same issue as std::isnan, see valid.cxx); promote
+    // to float for the check and for printing (a no-op for
+    // T=CCTK_REAL/CCTK_REAL4).
     using std::isfinite;
-    if (!(isfinite(val))) {
+    if (!(isfinite(float(val)))) {
       std::cerr << "!isfinite gi=" << gi
                 << " groupname=" << CCTK_FullGroupName(gi) << " vi=" << vi
-                << " i=" << i << " di=" << di << " val=" << val << "\n";
+                << " i=" << i << " di=" << di << " val=" << float(val) << "\n";
       for (int c = -1; c <= +1; ++c)
         for (int b = -1; b <= +1; ++b)
           for (int a = -1; a <= +1; ++a)
             if (vars.contains(j[0] + a, j[1] + b, j[2] + c))
               std::cerr << "  val[" << a << "," << b << "," << c
-                        << "]=" << vars(j[0] + a, j[1] + b, j[2] + c, vi)
+                        << "]=" << float(vars(j[0] + a, j[1] + b, j[2] + c, vi))
                         << "\n";
     }
-    assert(isfinite(val));
+    assert(isfinite(float(val)));
 #endif
     return val;
   }
@@ -334,11 +344,12 @@ template <typename T, int order, int centering> struct interpolator {
 
 // Dispatch centering/order and run the interpolator for one variable, whose
 // storage precision is T (CCTK_REAL for amrex::MultiFab-backed groups,
-// CCTK_REAL4 for amrex::fMultiFab-backed groups; see driver.hxx's
-// AnyMultiFab). The interpolated values are always handed back as CCTK_REAL,
-// converting float->double at store for T=CCTK_REAL4, since interpolation
-// results are collected and returned to the flesh in double precision
-// regardless of the source group's storage precision.
+// CCTK_REAL4 for amrex::fMultiFab-backed groups, CCTK_REAL2 for
+// hMultiFab-backed groups; see driver.hxx's AnyMultiFab). The interpolated
+// values are always handed back as CCTK_REAL, widening at store for
+// T=CCTK_REAL4/CCTK_REAL2, since interpolation results are collected and
+// returned to the flesh in double precision regardless of the source
+// group's storage precision.
 template <typename T, typename Particles>
 void interpolate_group(
     const int centering, const CCTK_INT interpolation_order,
@@ -861,7 +872,17 @@ void CarpetX::InterpolationSetup::Interpolate(
           // Dispatch on the group's storage precision. Coordinates and the
           // returned varresult are always CCTK_REAL; only the source group's
           // Array4/interpolator are instantiated at the group's own
-          // precision (CCTK_REAL4 for amrex::fMultiFab-backed groups).
+          // precision (CCTK_REAL4 for amrex::fMultiFab-backed groups,
+          // CCTK_REAL2 for hMultiFab-backed groups).
+#ifdef HAVE_CCTK_REAL2
+          if (vartype_is_real2(groupdata.vartype)) {
+            const amrex::Array4<const CCTK_REAL2> &vars =
+                std::get<hMultiFab>(*groupdata.mfab.at(tl)).array(pti);
+            interpolate_group<CCTK_REAL2>(
+                centering, interpolation_order, grid, gi, vi, patch, level,
+                vars, derivs, patch_allowed_boundaries, particles, varresult);
+          } else
+#endif
           if (vartype_is_real4(groupdata.vartype)) {
             const amrex::Array4<const CCTK_REAL4> &vars =
                 std::get<amrex::fMultiFab>(*groupdata.mfab.at(tl)).array(pti);
