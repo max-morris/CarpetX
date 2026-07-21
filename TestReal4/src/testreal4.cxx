@@ -23,7 +23,7 @@ namespace TestReal4 {
 // inside the domain agree up to the rounding error of the trigonometric
 // functions. TestReal4_Check verifies this for every point, including
 // ghost zones, which only works if single-level ghost sync is correct for
-// both a CCTK_REAL8 and a CCTK_REAL4 grid function.
+// a CCTK_REAL8, a CCTK_REAL4, and a CCTK_REAL2 grid function.
 template <typename T>
 constexpr T analytic(const T amplitude, const T x, const T y, const T z) {
   using std::acos, std::cos;
@@ -35,6 +35,21 @@ constexpr T analytic(const T amplitude, const T x, const T y, const T z) {
 // grid function a mismatch came from; they carry no other significance.
 constexpr CCTK_REAL8 amplitude8 = 1.0;
 constexpr CCTK_REAL4 amplitude4 = 2.0f;
+constexpr CCTK_REAL2 amplitude2 = CCTK_REAL2(1.5);
+
+// D5 compute-type indirection: `analytic<T>` above calls std::acos/cos,
+// which (unlike ordinary arithmetic on CCTK_REAL2 = `_Float16`, which GCC
+// built-in-promotes to `float` under the hood per D1) have no unambiguous
+// overload for a bare `_Float16` argument -- overload resolution among the
+// library's float/double/long double overloads is ambiguous (the same
+// issue documented for std::isnan in valid.cxx's check_valid_gf). So the
+// REAL2 analytic value is computed in `float` (which does have an
+// unambiguous std::cos/acos overload), and only the final result is
+// narrowed to CCTK_REAL2.
+static CCTK_REAL2 analytic2(const CCTK_REAL2 amplitude, const float x,
+                            const float y, const float z) {
+  return CCTK_REAL2(analytic<float>(float(amplitude), x, y, z));
+}
 
 extern "C" void TestReal4_Initialize(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_Initialize;
@@ -46,6 +61,7 @@ extern "C" void TestReal4_Initialize(CCTK_ARGUMENTS) {
         u8(p.I) = analytic<CCTK_REAL8>(amplitude8, p.x, p.y, p.z);
         u4(p.I) = analytic<CCTK_REAL4>(amplitude4, CCTK_REAL4(p.x),
                                         CCTK_REAL4(p.y), CCTK_REAL4(p.z));
+        u2(p.I) = analytic2(amplitude2, float(p.x), float(p.y), float(p.z));
       });
 }
 
@@ -61,8 +77,12 @@ extern "C" void TestReal4_Check(CCTK_ARGUMENTS) {
   // ghost point's own (extrapolated) coordinate rather than at its
   // periodic image's coordinate, so exact bit-for-bit equality is not
   // expected -- only agreement to within the precision of the type.
+  // CCTK_REAL2's tolerance is loosest by far: binary16 has only 10
+  // mantissa bits (machine epsilon ~9.77e-4), so even a single rounding
+  // step can move the amplitude-~1.5-scaled result by a few times 1e-3.
   constexpr CCTK_REAL8 tolerance8 = 1.0e-9;
   constexpr CCTK_REAL4 tolerance4 = 1.0e-6f;
+  constexpr CCTK_REAL8 tolerance2 = 3.0e-3;
 
   int n_checked = 0;
 
@@ -92,10 +112,29 @@ extern "C" void TestReal4_Check(CCTK_ARGUMENTS) {
           p.component, double(have4), double(good4), double(err4),
           double(tolerance4));
 
+    // D5: compare in double (via analytic2's float computation, narrowed
+    // to CCTK_REAL2), rather than calling std::abs on a bare CCTK_REAL2 --
+    // see the analytic2 comment above for why std::abs(CCTK_REAL2) would
+    // itself be ambiguous.
+    const CCTK_REAL2 good2 =
+        analytic2(amplitude2, float(p.x), float(p.y), float(p.z));
+    const CCTK_REAL2 have2 = u2(p.I);
+    const CCTK_REAL8 err2 = double(have2) - double(good2);
+    if (abs(err2) > tolerance2)
+      CCTK_VERROR(
+          "TestReal4: state2::u2 mismatch at (%.9g,%.9g,%.9g) "
+          "(level %d, patch %d, component %d): have %.9g, expected %.9g, "
+          "error %.9g (tolerance %.9g)",
+          double(p.x), double(p.y), double(p.z), p.level, p.patch,
+          p.component, double(have2), double(good2), double(err2),
+          double(tolerance2));
+
     ++n_checked;
   });
 
-  CCTK_VINFO("TestReal4: PASS (%d points)", n_checked);
+  CCTK_VINFO("TestReal4[state8]: PASS (%d points)", n_checked);
+  CCTK_VINFO("TestReal4[state4]: PASS (%d points)", n_checked);
+  CCTK_VINFO("TestReal4[state2]: PASS (%d points)", n_checked);
 }
 
 // CarpetX's checkpoint/recovery only restores each group's interior (not

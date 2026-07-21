@@ -1,12 +1,12 @@
 # Phase 2 self-checking mixed-precision test: physical (dirichlet) boundary
-# conditions. A REAL8 and a REAL4 cell-centred grid function are each
-# initialized to a value different from their (per-group) dirichlet
+# conditions. A REAL8, a REAL4, and a REAL2 cell-centred grid function are
+# each initialized to a value different from their (per-group) dirichlet
 # constant, then synced -- which applies CarpetX's physical boundary
 # conditions -- and finally checked: every point in the outer-boundary
-# region must carry exactly the configured dirichlet value, for both
-# precisions. This exercises the templated BoundaryCondition<CCTK_REAL4>
-# code path (boundaries.cxx/boundaries_impl.hxx) alongside the existing
-# double-precision path.
+# region must carry exactly the configured dirichlet value, for all three
+# precisions. This exercises the templated BoundaryCondition<CCTK_REAL4>/
+# BoundaryCondition<CCTK_REAL2> code paths (boundaries.cxx/
+# boundaries_impl.hxx) alongside the existing double-precision path.
 
 ActiveThorns = "
     CarpetX

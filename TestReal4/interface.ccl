@@ -1,11 +1,11 @@
 # Interface definition for thorn TestReal4
 #
-# Self-checking mixed-precision test: one CCTK_REAL8 grid function and one
-# CCTK_REAL4 grid function, both on the same (default) centering. Both are
-# filled with a deterministic, periodic analytic function of the
+# Self-checking mixed-precision test: a CCTK_REAL8, a CCTK_REAL4, and a
+# CCTK_REAL2 grid function, all on the same (default) centering. All three
+# are filled with a deterministic, periodic analytic function of the
 # coordinates, synced, and then verified everywhere (interior and ghost
-# zones) to make sure single-level ghost exchange works correctly for a
-# CCTK_REAL4 grid function alongside a CCTK_REAL8 one.
+# zones) to make sure single-level ghost exchange works correctly for
+# CCTK_REAL4 and CCTK_REAL2 grid functions alongside a CCTK_REAL8 one.
 
 IMPLEMENTS: TestReal4
 
@@ -23,6 +23,11 @@ CCTK_REAL4 state4 TYPE=gf
 {
   u4
 } "REAL4 (float) mixed-precision test state"
+
+CCTK_REAL2 state2 TYPE=gf
+{
+  u2
+} "REAL2 (binary16) mixed-precision test state"
 
 
 
@@ -47,6 +52,11 @@ CCTK_REAL4 state4_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
   u4_2lev
 } "REAL4 linear test state for the two-level regrid+prolongation test"
 
+CCTK_REAL2 state2_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
+{
+  u2_2lev
+} "REAL2 linear test state for the two-level regrid+prolongation test"
+
 
 
 # --- Phase 2: physical boundary condition test ------------------------------
@@ -64,6 +74,11 @@ CCTK_REAL4 state4_bc TYPE=gf CENTERING={CCC} TAGS='dirichlet_values={4.25}'
 {
   u4_bc
 } "REAL4 test state for verifying dirichlet physical boundary conditions"
+
+CCTK_REAL2 state2_bc TYPE=gf CENTERING={CCC} TAGS='dirichlet_values={3.5}'
+{
+  u2_bc
+} "REAL2 test state for verifying dirichlet physical boundary conditions"
 
 
 
@@ -92,3 +107,13 @@ CCTK_REAL4 rhs4_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
 {
   r4_evol
 } "RHS of state4_evol"
+
+CCTK_REAL2 state2_evol TYPE=gf CENTERING={CCC} TAGS='rhs="TestReal4::rhs2_evol"'
+{
+  u2_evol
+} "REAL2 exponential-decay ODE state (du/dt = -decay_rate u)"
+
+CCTK_REAL2 rhs2_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
+{
+  r2_evol
+} "RHS of state2_evol"

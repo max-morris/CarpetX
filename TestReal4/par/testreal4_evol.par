@@ -1,7 +1,7 @@
 # Phase 2 self-checking mixed-precision test: ODESolvers evolution smoke
-# test. Two independent exponential-decay ODEs (du/dt = -decay_rate u) are
-# evolved by ODESolvers using RK4, one held as a REAL8 grid function and the
-# other as a REAL4 grid function, exercising ODESolvers::statecomp_t's
+# test. Three independent exponential-decay ODEs (du/dt = -decay_rate u)
+# are evolved by ODESolvers using RK4, held as a REAL8, a REAL4, and a
+# REAL2 grid function respectively, exercising ODESolvers::statecomp_t's
 # per-group mixed-precision support (each (state, rhs) pair keeps its own
 # element type throughout the lincomb/combine_valids kernels). Modeled on
 # TestODESolvers/test/test-rk4.par (single-cell unigrid domain, periodic so

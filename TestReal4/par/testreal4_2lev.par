@@ -1,10 +1,10 @@
 # Phase 2 self-checking mixed-precision test: static mesh refinement
-# (BoxInBox) creates a second refinement level around the origin; a REAL8
-# and a REAL4 grid function, both holding a linear function of the
+# (BoxInBox) creates a second refinement level around the origin; a REAL8,
+# a REAL4, and a REAL2 grid function, all holding a linear function of the
 # coordinates, are initialized on the coarse level and then verified on
-# BOTH levels (interior and ghost zones, excluding the outer physical
+# ALL levels (interior and ghost zones, excluding the outer physical
 # boundary) against the analytic function. Because the function is linear
-# and CarpetX::prolongation_order = 1, float and double prolongation onto
+# and CarpetX::prolongation_order = 1, double/float/half prolongation onto
 # (and across) the fine level must be exact up to roundoff.
 
 ActiveThorns = "

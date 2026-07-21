@@ -1,7 +1,7 @@
-# Self-checking mixed-precision test: fill a CCTK_REAL8 and a CCTK_REAL4
-# grid function with a periodic analytic function, sync ghost zones on a
-# single unigrid level, and verify both grid functions everywhere
-# (interior and ghosts) against the analytic function.
+# Self-checking mixed-precision test: fill a CCTK_REAL8, a CCTK_REAL4, and
+# a CCTK_REAL2 grid function with a periodic analytic function, sync ghost
+# zones on a single unigrid level, and verify all three grid functions
+# everywhere (interior and ghosts) against the analytic function.
 
 ActiveThorns = "
     CarpetX

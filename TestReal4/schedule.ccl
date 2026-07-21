@@ -18,41 +18,43 @@
 # CycleTimelevels/regrid, even for groups the active parfile never
 # intended to exercise. So the Initialize (and any Sync needed to cover
 # ghosts/the outer boundary) schedule items below are unconditional too,
-# for all four test groups, in every parfile. Only the analysis/
-# verification "Check" schedule items -- which assert a specific test's
-# analytic solution and would be meaningless (or invalid, e.g. wrong
+# for all six test groups (REAL8/REAL4/REAL2), in every parfile. Only the
+# analysis/verification "Check" schedule items -- which assert a specific
+# test's analytic solution and would be meaningless (or invalid, e.g. wrong
 # domain/centering/boundary assumptions) under another parfile's setup --
 # stay gated behind the matching run_*_test parameter, so each parfile
 # still only checks the test(s) it is set up for.
 
-STORAGE: state8 state4
-STORAGE: state8_2lev state4_2lev
-STORAGE: state8_bc state4_bc
-STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol
+STORAGE: state8 state4 state2
+STORAGE: state8_2lev state4_2lev state2_2lev
+STORAGE: state8_bc state4_bc state2_bc
+STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol state2_evol rhs2_evol
 
 SCHEDULE TestReal4_Initialize AT initial
 {
   LANG: C
   WRITES: state4(interior)
   WRITES: state8(interior)
-  SYNC: state4 state8
-} "Initialize REAL4 and REAL8 test states with a periodic analytic function"
+  WRITES: state2(interior)
+  SYNC: state4 state8 state2
+} "Initialize REAL4, REAL8, and REAL2 test states with a periodic analytic function"
 
 SCHEDULE TestReal4_PostRecover_ReinitRHS AT post_recover_variables
 {
   LANG: C
   WRITES: rhs8_evol(interior)
   WRITES: rhs4_evol(interior)
-} "Re-zero-fill rhs8_evol/rhs4_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal4_PostRecover_Sync syncs them, for the same reason TestReal4_Evol_Initial zero-fills them at CCTK_INITIAL"
+  WRITES: rhs2_evol(interior)
+} "Re-zero-fill rhs8_evol/rhs4_evol/rhs2_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal4_PostRecover_Sync syncs them, for the same reason TestReal4_Evol_Initial zero-fills them at CCTK_INITIAL"
 
 SCHEDULE TestReal4_PostRecover_Sync AT post_recover_variables AFTER TestReal4_PostRecover_ReinitRHS
 {
   LANG: C
   OPTIONS: global
-  SYNC: state8 state4
-  SYNC: state8_2lev state4_2lev
-  SYNC: state8_bc state4_bc
-  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
+  SYNC: state8 state4 state2
+  SYNC: state8_2lev state4_2lev state2_2lev
+  SYNC: state8_bc state4_bc state2_bc
+  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol state2_evol rhs2_evol
 } "Re-sync every test group's ghost zones and outer boundary after checkpoint recovery (which only restores each group's interior), for the same reason -- and covering the same unconditional set of groups -- as the postregrid/postrestrict Sync items below"
 
 if (run_periodic_test)
@@ -62,7 +64,8 @@ if (run_periodic_test)
     LANG: C
     READS: state4(everywhere)
     READS: state8(everywhere)
-  } "Check REAL4 and REAL8 test states everywhere (interior and ghosts), using the GF3D2 accessor family"
+    READS: state2(everywhere)
+  } "Check REAL4, REAL8, and REAL2 test states everywhere (interior and ghosts), using the GF3D2 accessor family"
 
   SCHEDULE TestReal4_CheckGF3D5 AT poststep AFTER TestReal4_Check
   {
@@ -82,12 +85,13 @@ SCHEDULE TestReal4_2Lev_Initialize AT initial
   LANG: C
   WRITES: state8_2lev(interior)
   WRITES: state4_2lev(interior)
-} "Initialize the REAL4 and REAL8 linear test states on the coarse level"
+  WRITES: state2_2lev(interior)
+} "Initialize the REAL4, REAL8, and REAL2 linear test states on the coarse level"
 
 SCHEDULE TestReal4_2Lev_Sync AT initial AFTER TestReal4_2Lev_Initialize
 {
   LANG: C
-  SYNC: state8_2lev state4_2lev
+  SYNC: state8_2lev state4_2lev state2_2lev
 } "Sync test data (single level only exists at this point)"
 
 # The two postregrid/postrestrict Sync items below are unconditional
@@ -105,20 +109,20 @@ SCHEDULE TestReal4_2Lev_Sync AT initial AFTER TestReal4_2Lev_Initialize
 SCHEDULE TestReal4_2Lev_Sync AT postregrid
 {
   LANG: C
-  SYNC: state8 state4
-  SYNC: state8_2lev state4_2lev
-  SYNC: state8_bc state4_bc
-  SYNC: state8_evol state4_evol
-} "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written. rhs8_evol/rhs4_evol are deliberately excluded: they are TAGS='checkpoint=\"no\"' scratch groups that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing them here would trip the sync precondition on their invalid new-level interior; they are recomputed every ODESolvers RHS evaluation and never need to survive a regrid/restrict"
+  SYNC: state8 state4 state2
+  SYNC: state8_2lev state4_2lev state2_2lev
+  SYNC: state8_bc state4_bc state2_bc
+  SYNC: state8_evol state4_evol state2_evol
+} "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written. rhs8_evol/rhs4_evol/rhs2_evol are deliberately excluded: they are TAGS='checkpoint=\"no\"' scratch groups that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing them here would trip the sync precondition on their invalid new-level interior; they are recomputed every ODESolvers RHS evaluation and never need to survive a regrid/restrict"
 
 SCHEDULE TestReal4_2Lev_Sync AT postrestrict
 {
   LANG: C
-  SYNC: state8 state4
-  SYNC: state8_2lev state4_2lev
-  SYNC: state8_bc state4_bc
-  SYNC: state8_evol state4_evol
-} "Sync all test groups after restriction, for the same reason as the postregrid item above (rhs8_evol/rhs4_evol excluded for the same reason)"
+  SYNC: state8 state4 state2
+  SYNC: state8_2lev state4_2lev state2_2lev
+  SYNC: state8_bc state4_bc state2_bc
+  SYNC: state8_evol state4_evol state2_evol
+} "Sync all test groups after restriction, for the same reason as the postregrid item above (rhs8_evol/rhs4_evol/rhs2_evol excluded for the same reason)"
 
 if (run_2lev_test)
 {
@@ -127,7 +131,8 @@ if (run_2lev_test)
     LANG: C
     READS: state8_2lev(everywhere)
     READS: state4_2lev(everywhere)
-  } "Verify the REAL4 and REAL8 linear test states against the analytic function on every active refinement level, including ghost zones filled by prolongation"
+    READS: state2_2lev(everywhere)
+  } "Verify the REAL4, REAL8, and REAL2 linear test states against the analytic function on every active refinement level, including ghost zones filled by prolongation"
 }
 
 
@@ -141,8 +146,9 @@ SCHEDULE TestReal4_BC_Initialize AT initial
   LANG: C
   WRITES: state8_bc(interior)
   WRITES: state4_bc(interior)
-  SYNC: state8_bc state4_bc
-} "Initialize the REAL4 and REAL8 boundary-condition test states, then sync to apply the physical (dirichlet) boundary conditions"
+  WRITES: state2_bc(interior)
+  SYNC: state8_bc state4_bc state2_bc
+} "Initialize the REAL4, REAL8, and REAL2 boundary-condition test states, then sync to apply the physical (dirichlet) boundary conditions"
 
 if (run_bc_test)
 {
@@ -151,7 +157,8 @@ if (run_bc_test)
     LANG: C
     READS: state8_bc(everywhere)
     READS: state4_bc(everywhere)
-  } "Verify that the outer-boundary (dirichlet) ghost points carry the configured dirichlet value, for both precisions"
+    READS: state2_bc(everywhere)
+  } "Verify that the outer-boundary (dirichlet) ghost points carry the configured dirichlet value, for all three precisions"
 }
 
 
@@ -165,9 +172,11 @@ SCHEDULE TestReal4_Evol_Initial AT initial
   LANG: C
   WRITES: state8_evol(everywhere)
   WRITES: state4_evol(everywhere)
+  WRITES: state2_evol(everywhere)
   WRITES: rhs8_evol(everywhere)
   WRITES: rhs4_evol(everywhere)
-} "Initialize the REAL4 and REAL8 exponential-decay ODE states to u0 (and their rhs groups to 0, so that storage CarpetX always grants is always validly written)"
+  WRITES: rhs2_evol(everywhere)
+} "Initialize the REAL4, REAL8, and REAL2 exponential-decay ODE states to u0 (and their rhs groups to 0, so that storage CarpetX always grants is always validly written)"
 
 if (run_evol_test)
 {
@@ -175,20 +184,21 @@ if (run_evol_test)
   {
     LANG: C
     OPTIONS: global
-    SYNC: state8_evol state4_evol
+    SYNC: state8_evol state4_evol state2_evol
   } "Synchronize the ODE states after each ODESolvers (sub)step"
 
   SCHEDULE TestReal4_Evol_RHS IN ODESolvers_RHS
   {
     LANG: C
-    READS: state8_evol(everywhere), state4_evol(everywhere)
-    WRITES: rhs8_evol(everywhere), rhs4_evol(everywhere)
-  } "Calculate RHS = -decay_rate * state for both precisions"
+    READS: state8_evol(everywhere), state4_evol(everywhere), state2_evol(everywhere)
+    WRITES: rhs8_evol(everywhere), rhs4_evol(everywhere), rhs2_evol(everywhere)
+  } "Calculate RHS = -decay_rate * state for all three precisions"
 
   SCHEDULE TestReal4_Evol_Check AT poststep
   {
     LANG: C
     READS: state8_evol(everywhere)
     READS: state4_evol(everywhere)
-  } "Check the evolved REAL4 and REAL8 states against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
+    READS: state2_evol(everywhere)
+  } "Check the evolved REAL4, REAL8, and REAL2 states against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
 }
