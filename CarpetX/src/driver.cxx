@@ -590,33 +590,40 @@ int get_group_prolongation_order(const int gi) {
   return group_prolongation_order;
 }
 
-amrex::Interpolater *get_interpolator(const std::string prolongation_type,
-                                      const int prolongation_order,
-                                      const std::array<int, dim> indextype) {
+// Precision-aware prolongation operator lookup. T = CCTK_REAL selects from
+// the (amrex::MultiFab-backed) REAL/REAL8 tables, T = CCTK_REAL4 from the
+// (amrex::fMultiFab-backed) CCTK_REAL4 tables; both axes of every table are
+// explicitly instantiated in the prolongate_3d_rf2_impl_*.cxx files (see
+// prolongate_3d_rf2.hxx's CARPETX_DECLARE_PROLONGATE_TABLE macro).
+template <typename T>
+InterpolaterT<T> *
+get_interpolator_t(const std::string &prolongation_type,
+                  const int prolongation_order,
+                  const std::array<int, dim> &indextype) {
   const int indextype_scalar =
       (indextype[0] << 2) | (indextype[1] << 1) | (indextype[2] << 0);
 
-  const std::map<int, std::array<amrex::Interpolater *, 8> > *operators =
+  const std::map<int, std::array<InterpolaterT<T> *, 8> > *operators =
       nullptr;
 
   if (prolongation_type == "interpolate")
-    operators = &prolongate_poly_3d_rf2;
+    operators = &prolongate_poly_3d_rf2_table<T>();
   else if (prolongation_type == "conservative")
-    operators = &prolongate_cons_3d_rf2;
+    operators = &prolongate_cons_3d_rf2_table<T>();
   else if (prolongation_type == "ddf")
-    operators = &prolongate_ddf_3d_rf2;
+    operators = &prolongate_ddf_3d_rf2_table<T>();
   else if (prolongation_type == "eno")
-    operators = &prolongate_eno_3d_rf2;
+    operators = &prolongate_eno_3d_rf2_table<T>();
   else if (prolongation_type == "minmod")
-    operators = &prolongate_minmod_3d_rf2;
+    operators = &prolongate_minmod_3d_rf2_table<T>();
   else if (prolongation_type == "hermite")
-    operators = &prolongate_hermite_3d_rf2;
+    operators = &prolongate_hermite_3d_rf2_table<T>();
   else if (prolongation_type == "natural")
-    operators = &prolongate_natural_3d_rf2;
+    operators = &prolongate_natural_3d_rf2_table<T>();
   else if (prolongation_type == "poly-cons3lfb")
-    operators = &prolongate_poly_cons3lfb_3d_rf2;
+    operators = &prolongate_poly_cons3lfb_3d_rf2_table<T>();
   else if (prolongation_type == "poly-eno3lfb")
-    operators = &prolongate_poly_eno3lfb_3d_rf2;
+    operators = &prolongate_poly_eno3lfb_3d_rf2_table<T>();
   else
     CCTK_VERROR("Unsupported prolongation type %s", prolongation_type.c_str());
 
@@ -627,8 +634,9 @@ amrex::Interpolater *get_interpolator(const std::string prolongation_type,
   return operators->at(prolongation_order).at(indextype_scalar);
 }
 
-amrex::Interpolater *
-get_interpolator(const GHExt::PatchData::LevelData::GroupData &groupdata) {
+template <typename T>
+InterpolaterT<T> *
+get_interpolator_t(const GHExt::PatchData::LevelData::GroupData &groupdata) {
   DECLARE_CCTK_PARAMETERS;
 
   const std::string group_prolongation_type =
@@ -637,9 +645,14 @@ get_interpolator(const GHExt::PatchData::LevelData::GroupData &groupdata) {
       get_group_prolongation_order(groupdata.groupindex);
   const std::array<int, dim> &group_indextype = groupdata.indextype;
 
-  return get_interpolator(group_prolongation_type, group_prolongation_order,
-                          group_indextype);
+  return get_interpolator_t<T>(group_prolongation_type,
+                               group_prolongation_order, group_indextype);
 }
+
+template InterpolaterT<CCTK_REAL> *get_interpolator_t<CCTK_REAL>(
+    const GHExt::PatchData::LevelData::GroupData &groupdata);
+template InterpolaterT<CCTK_REAL4> *get_interpolator_t<CCTK_REAL4>(
+    const GHExt::PatchData::LevelData::GroupData &groupdata);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -854,7 +867,16 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
   indextype = get_group_indextype(gi);
   nghostzones = get_group_nghostzones(gi);
 
-  interpolator = get_interpolator(*this); // reads groupindex, indextype
+  // reads groupindex, indextype; see the comments on
+  // GroupData::interpolator_real8/interpolator_real4 in driver.hxx for why
+  // exactly one precision is set here
+  if (vartype_is_real4(vartype)) {
+    interpolator_real8 = nullptr;
+    interpolator_real4 = get_interpolator_t<CCTK_REAL4>(*this);
+  } else {
+    interpolator_real8 = get_interpolator_t<CCTK_REAL>(*this);
+    interpolator_real4 = nullptr;
+  }
 
   // Periodic boundaries require (num interior points) >= (num ghost points)
   const auto &geom = ghext->patchdata.at(patch).amrcore->Geom(level);

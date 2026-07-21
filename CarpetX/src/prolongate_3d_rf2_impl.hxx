@@ -1219,27 +1219,27 @@ call_stencil_3d(const F &crse, const Si &si, const Sj &sj, const Sk &sk) {
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
 prolongate_3d_rf2<CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ,
-                  ORDERK, FB>::~prolongate_3d_rf2() {}
+                  ORDERK, FB, T>::~prolongate_3d_rf2() {}
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
 amrex::Box
 prolongate_3d_rf2<CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ,
-                  ORDERK, FB>::CoarseBox(const amrex::Box &fine,
-                                         const int ratio) {
+                  ORDERK, FB, T>::CoarseBox(const amrex::Box &fine,
+                                            const int ratio) {
   return CoarseBox(fine, amrex::IntVect(ratio));
 }
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
 amrex::Box
 prolongate_3d_rf2<CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ,
-                  ORDERK, FB>::CoarseBox(const amrex::Box &fine,
-                                         const amrex::IntVect &ratio) {
+                  ORDERK, FB, T>::CoarseBox(const amrex::Box &fine,
+                                            const amrex::IntVect &ratio) {
   constexpr vect<int, dim> required_ghosts = {
       interp1d<CENTI, INTPI, ORDERI>::required_ghosts,
       interp1d<CENTJ, INTPJ, ORDERJ>::required_ghosts,
@@ -1255,18 +1255,18 @@ prolongate_3d_rf2<CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ,
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
 void prolongate_3d_rf2<
-    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK,
-    FB>::interp_per_var(const amrex::FArrayBox &crse, const int crse_comp,
-                        amrex::FArrayBox &fine, const int fine_comp,
-                        const int ncomp, const amrex::Box &fine_region,
-                        const amrex::IntVect &ratio,
-                        const amrex::Geometry &crse_geom,
-                        const amrex::Geometry &fine_geom,
-                        amrex::Vector<amrex::BCRec> const &bcr,
-                        const int actual_comp, const int actual_state,
-                        const amrex::RunOn gpu_or_cpu) {
+    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK, FB,
+    T>::interp_per_var(const amrex::BaseFab<T> &crse, const int crse_comp,
+                       amrex::BaseFab<T> &fine, const int fine_comp,
+                       const int ncomp, const amrex::Box &fine_region,
+                       const amrex::IntVect &ratio,
+                       const amrex::Geometry &crse_geom,
+                       const amrex::Geometry &fine_geom,
+                       amrex::Vector<amrex::BCRec> const &bcr,
+                       const int actual_comp, const int actual_state,
+                       const amrex::RunOn gpu_or_cpu) {
   DECLARE_CCTK_PARAMETERS;
 
   static std::once_flag have_timers;
@@ -1310,9 +1310,9 @@ void prolongate_3d_rf2<
   constexpr vect<int, dim> order{ORDERI, ORDERJ, ORDERK};
 
   {
-    static test_interp1d<CENTI, INTPI, ORDERI, CCTK_REAL> testi;
-    static test_interp1d<CENTJ, INTPJ, ORDERJ, CCTK_REAL> testj;
-    static test_interp1d<CENTK, INTPK, ORDERK, CCTK_REAL> testk;
+    static test_interp1d<CENTI, INTPI, ORDERI, T> testi;
+    static test_interp1d<CENTJ, INTPJ, ORDERJ, T> testj;
+    static test_interp1d<CENTK, INTPK, ORDERK, T> testk;
   }
 
 #ifdef CCTK_DEBUG
@@ -1336,8 +1336,8 @@ void prolongate_3d_rf2<
                                       interpolation[2] == ENO && order[2] > 0};
 
   for (int comp = 0; comp < ncomp; ++comp) {
-    const CCTK_REAL *restrict const crseptr = crse.dataPtr(crse_comp + comp);
-    CCTK_REAL *restrict fineptr = fine.dataPtr(fine_comp + comp);
+    const T *restrict const crseptr = crse.dataPtr(crse_comp + comp);
+    T *restrict fineptr = fine.dataPtr(fine_comp + comp);
 
     const auto crse = [=] CCTK_DEVICE(const int i, const int j, const int k)
         __attribute__((__always_inline__, __flatten__)) {
@@ -1356,7 +1356,7 @@ void prolongate_3d_rf2<
       return fineptr[finebox.index(vfine)];
     };
     const auto setfine = [=] CCTK_DEVICE(const int i, const int j, const int k,
-                                         const CCTK_REAL val)
+                                         const T val)
         __attribute__((__always_inline__, __flatten__)) {
       const amrex::IntVect vfine(i, j, k);
 #ifdef CCTK_DEBUG
@@ -1416,7 +1416,7 @@ void prolongate_3d_rf2<
           vect<int, dim> shift{0, 0, 0};
           constexpr bool any_use_shift = any(use_shift);
           if (any_use_shift) {
-            CCTK_REAL min_dd = 1 / CCTK_REAL(0);
+            T min_dd = 1 / T(0);
             // Loop over all possible shifts
             for (int sk = -maxshift[2]; sk <= +maxshift[2]; ++sk) {
               for (int sj = -maxshift[1]; sj <= +maxshift[1]; ++sj) {
@@ -1446,13 +1446,13 @@ void prolongate_3d_rf2<
                   // Calculate all undivided differences in the x-direction,
                   // looping over the y- and z-directions and finding the
                   // maximum undivided difference there
-                  CCTK_REAL ddx = 0;
+                  T ddx = 0;
                   if (use_shift[0]) {
                     for (int dk = stencil_radius[2][0];
                          dk <= stencil_radius[2][1]; ++dk) {
                       for (int dj = stencil_radius[1][0];
                            dj <= stencil_radius[1][1]; ++dj) {
-                        const CCTK_REAL dd =
+                        const T dd =
                             undivided_difference_1d<CENTI, INTPI, ORDERI>()(
                                 [&](const int di) {
                                   return crse(icrse[0] + si + di,
@@ -1465,13 +1465,13 @@ void prolongate_3d_rf2<
                   }
 
                   // Same with y-undivided differences
-                  CCTK_REAL ddy = 0;
+                  T ddy = 0;
                   if (use_shift[1]) {
                     for (int dk = stencil_radius[2][0];
                          dk <= stencil_radius[2][1]; ++dk) {
                       for (int di = stencil_radius[0][0];
                            di <= stencil_radius[0][1]; ++di) {
-                        const CCTK_REAL dd =
+                        const T dd =
                             undivided_difference_1d<CENTJ, INTPJ, ORDERJ>()(
                                 [&](const int dj) {
                                   return crse(icrse[0] + si + di,
@@ -1484,13 +1484,13 @@ void prolongate_3d_rf2<
                   }
 
                   // Same with z-undivided differences
-                  CCTK_REAL ddz = 0;
+                  T ddz = 0;
                   if (use_shift[2]) {
                     for (int dj = stencil_radius[1][0];
                          dj <= stencil_radius[1][1]; ++dj) {
                       for (int di = stencil_radius[0][0];
                            di <= stencil_radius[0][1]; ++di) {
-                        const CCTK_REAL dd =
+                        const T dd =
                             undivided_difference_1d<CENTK, INTPK, ORDERK>()(
                                 [&](const int dk) {
                                   return crse(icrse[0] + si + di,
@@ -1503,10 +1503,10 @@ void prolongate_3d_rf2<
                   }
 
                   // Prefer centred stencils
-                  const CCTK_REAL penalty =
-                      1 + sqrt(std::numeric_limits<CCTK_REAL>::epsilon()) *
+                  const T penalty =
+                      1 + sqrt(std::numeric_limits<T>::epsilon()) *
                               (abs(si) + abs(sj) + abs(sk));
-                  const CCTK_REAL dd = penalty * fmax(fmax(ddx, ddy), ddz);
+                  const T dd = penalty * fmax(fmax(ddx, ddy), ddz);
                   if (dd < min_dd) {
                     min_dd = dd;
                     shift = {si, sj, sk};
@@ -1516,7 +1516,7 @@ void prolongate_3d_rf2<
             }
           } // if any_use_shift
 
-          const CCTK_REAL val = call_stencil_3d(
+          const T val = call_stencil_3d(
               [&](const int di, const int dj, const int dk) {
                 return crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk);
               },
@@ -1530,7 +1530,7 @@ void prolongate_3d_rf2<
                 return interp1d<CENTK, INTPK, ORDERK>()(crse, shift[2], off[2]);
               });
 
-          CCTK_REAL res;
+          T res;
 
           if constexpr (FB == FB_NONE ||
                         (((INTPI != CONS && INTPI != ENO) || ORDERI <= 1) &&
@@ -1556,7 +1556,7 @@ void prolongate_3d_rf2<
                 INTPJ == CONS || INTPJ == ENO ? CONS : INTPJ;
             constexpr interpolation_t LININTPK =
                 INTPK == CONS || INTPK == ENO ? CONS : INTPK;
-            const CCTK_REAL val_lin = call_stencil_3d(
+            const T val_lin = call_stencil_3d(
                 [&](const int di, const int dj, const int dk) {
                   return crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk);
                 },
@@ -1587,7 +1587,7 @@ void prolongate_3d_rf2<
                                                                   off[2]);
               // Fallback condition 1: The interpolated value introduces a new
               // extremum
-              CCTK_REAL minval = +1 / CCTK_REAL(0), maxval = -1 / CCTK_REAL(0);
+              T minval = +1 / T(0), maxval = -1 / T(0);
               for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                 for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
                   for (int di = sradi[0]; di <= sradi[1]; ++di) {
@@ -1610,11 +1610,11 @@ void prolongate_3d_rf2<
                 bool need_fallback_i = false;
                 for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                   for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
-                    const CCTK_REAL s0 =
+                    const T s0 =
                         crse(icrse[0] + 1, icrse[1] + dj, icrse[2] + dk) -
                         crse(icrse[0] + 0, icrse[1] + dj, icrse[2] + dk);
                     for (int di = sradi[0] + 2; di <= sradi[1]; ++di) {
-                      const CCTK_REAL s =
+                      const T s =
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk) -
                           crse(icrse[0] + (di - 1), icrse[1] + dj,
                                icrse[2] + dk);
@@ -1629,11 +1629,11 @@ void prolongate_3d_rf2<
                 bool need_fallback_j = false;
                 for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                   for (int di = sradi[0]; di <= sradi[1]; ++di) {
-                    const CCTK_REAL s0 =
+                    const T s0 =
                         crse(icrse[0] + di, icrse[1] + 1, icrse[2] + dk) -
                         crse(icrse[0] + di, icrse[1] + 0, icrse[2] + dk);
                     for (int dj = sradj[0] + 2; dj <= sradj[1]; ++dj) {
-                      const CCTK_REAL s =
+                      const T s =
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk) -
                           crse(icrse[0] + di, icrse[1] + (dj - 1),
                                icrse[2] + dk);
@@ -1648,11 +1648,11 @@ void prolongate_3d_rf2<
                 bool need_fallback_k = false;
                 for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
                   for (int di = sradi[0]; di <= sradi[1]; ++di) {
-                    const CCTK_REAL s0 =
+                    const T s0 =
                         crse(icrse[0] + di, icrse[1] + dj, icrse[2] + 1) -
                         crse(icrse[0] + di, icrse[1] + dj, icrse[2] + 0);
                     for (int dk = sradk[0] + 2; dk <= sradk[1]; ++dk) {
-                      const CCTK_REAL s =
+                      const T s =
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk) -
                           crse(icrse[0] + di, icrse[1] + dj,
                                icrse[2] + (dk - 1));
@@ -1690,18 +1690,19 @@ void prolongate_3d_rf2<
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
 void prolongate_3d_rf2<
-    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK,
-    FB>::interp_per_group(const amrex::FArrayBox &crse_box, const int crse_comp,
-                          amrex::FArrayBox &fine_box, const int fine_comp,
-                          const int ncomps, const amrex::Box &fine_region,
-                          const amrex::IntVect &ratio,
-                          const amrex::Geometry &crse_geom,
-                          const amrex::Geometry &fine_geom,
-                          amrex::Vector<amrex::BCRec> const &bcr,
-                          const int actual_comp, const int actual_state,
-                          const amrex::RunOn gpu_or_cpu) {
+    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK, FB,
+    T>::interp_per_group(const amrex::BaseFab<T> &crse_box,
+                         const int crse_comp, amrex::BaseFab<T> &fine_box,
+                         const int fine_comp, const int ncomps,
+                         const amrex::Box &fine_region,
+                         const amrex::IntVect &ratio,
+                         const amrex::Geometry &crse_geom,
+                         const amrex::Geometry &fine_geom,
+                         amrex::Vector<amrex::BCRec> const &bcr,
+                         const int actual_comp, const int actual_state,
+                         const amrex::RunOn gpu_or_cpu) {
   DECLARE_CCTK_PARAMETERS;
 
   constexpr int maxncomps = 16;
@@ -1748,9 +1749,9 @@ void prolongate_3d_rf2<
   constexpr vect<int, dim> order{ORDERI, ORDERJ, ORDERK};
 
   {
-    static test_interp1d<CENTI, INTPI, ORDERI, CCTK_REAL> testi;
-    static test_interp1d<CENTJ, INTPJ, ORDERJ, CCTK_REAL> testj;
-    static test_interp1d<CENTK, INTPK, ORDERK, CCTK_REAL> testk;
+    static test_interp1d<CENTI, INTPI, ORDERI, T> testi;
+    static test_interp1d<CENTJ, INTPJ, ORDERJ, T> testj;
+    static test_interp1d<CENTK, INTPK, ORDERK, T> testk;
   }
 
 #ifdef CCTK_DEBUG
@@ -1773,9 +1774,9 @@ void prolongate_3d_rf2<
                                       interpolation[1] == ENO && order[1] > 0,
                                       interpolation[2] == ENO && order[2] > 0};
 
-  const CCTK_REAL *restrict const crseptr = crse_box.dataPtr(crse_comp);
+  const T *restrict const crseptr = crse_box.dataPtr(crse_comp);
   const std::ptrdiff_t crsenp = crse_box.dataPtr(1) - crse_box.dataPtr(0);
-  CCTK_REAL *restrict fineptr = fine_box.dataPtr(fine_comp);
+  T *restrict fineptr = fine_box.dataPtr(fine_comp);
   const std::ptrdiff_t finenp = fine_box.dataPtr(1) - fine_box.dataPtr(0);
 
   const auto crse = [=] CCTK_DEVICE(const int i, const int j, const int k,
@@ -1799,7 +1800,7 @@ void prolongate_3d_rf2<
   };
 #endif
   const auto setfine = [=] CCTK_DEVICE(const int i, const int j, const int k,
-                                       const int comp, const CCTK_REAL val)
+                                       const int comp, const T val)
       __attribute__((__always_inline__, __flatten__)) {
     const amrex::IntVect vfine(i, j, k);
 #ifdef CCTK_DEBUG
@@ -1858,7 +1859,7 @@ void prolongate_3d_rf2<
         vect<int, dim> shift{0, 0, 0};
         constexpr bool any_use_shift = any(use_shift);
         if (any_use_shift) {
-          CCTK_REAL min_dd = 1 / CCTK_REAL(0);
+          T min_dd = 1 / T(0);
           // Loop over all possible shifts
           for (int sk = -maxshift[2]; sk <= +maxshift[2]; ++sk) {
             for (int sj = -maxshift[1]; sj <= +maxshift[1]; ++sj) {
@@ -1888,14 +1889,14 @@ void prolongate_3d_rf2<
                 // Calculate all undivided differences in the x-direction,
                 // looping over the y- and z-directions and finding the
                 // maximum undivided difference there
-                CCTK_REAL ddx = 0;
+                T ddx = 0;
                 if (use_shift[0]) {
                   for (int comp = 0; comp < ncomps; ++comp) {
                     for (int dk = stencil_radius[2][0];
                          dk <= stencil_radius[2][1]; ++dk) {
                       for (int dj = stencil_radius[1][0];
                            dj <= stencil_radius[1][1]; ++dj) {
-                        const CCTK_REAL dd =
+                        const T dd =
                             undivided_difference_1d<CENTI, INTPI, ORDERI>()(
                                 [&](const int di) {
                                   return crse(icrse[0] + si + di,
@@ -1909,14 +1910,14 @@ void prolongate_3d_rf2<
                 }
 
                 // Same with y-undivided differences
-                CCTK_REAL ddy = 0;
+                T ddy = 0;
                 if (use_shift[1]) {
                   for (int comp = 0; comp < ncomps; ++comp) {
                     for (int dk = stencil_radius[2][0];
                          dk <= stencil_radius[2][1]; ++dk) {
                       for (int di = stencil_radius[0][0];
                            di <= stencil_radius[0][1]; ++di) {
-                        const CCTK_REAL dd =
+                        const T dd =
                             undivided_difference_1d<CENTJ, INTPJ, ORDERJ>()(
                                 [&](const int dj) {
                                   return crse(icrse[0] + si + di,
@@ -1930,14 +1931,14 @@ void prolongate_3d_rf2<
                 }
 
                 // Same with z-undivided differences
-                CCTK_REAL ddz = 0;
+                T ddz = 0;
                 if (use_shift[2]) {
                   for (int comp = 0; comp < ncomps; ++comp) {
                     for (int dj = stencil_radius[1][0];
                          dj <= stencil_radius[1][1]; ++dj) {
                       for (int di = stencil_radius[0][0];
                            di <= stencil_radius[0][1]; ++di) {
-                        const CCTK_REAL dd =
+                        const T dd =
                             undivided_difference_1d<CENTK, INTPK, ORDERK>()(
                                 [&](const int dk) {
                                   return crse(icrse[0] + si + di,
@@ -1951,10 +1952,10 @@ void prolongate_3d_rf2<
                 }
 
                 // Prefer centred stencils
-                const CCTK_REAL penalty =
-                    1 + sqrt(std::numeric_limits<CCTK_REAL>::epsilon()) *
+                const T penalty =
+                    1 + sqrt(std::numeric_limits<T>::epsilon()) *
                             (abs(si) + abs(sj) + abs(sk));
-                const CCTK_REAL dd = penalty * fmax(fmax(ddx, ddy), ddz);
+                const T dd = penalty * fmax(fmax(ddx, ddy), ddz);
                 if (dd < min_dd) {
                   min_dd = dd;
                   shift = {si, sj, sk};
@@ -1964,7 +1965,7 @@ void prolongate_3d_rf2<
           }
         } // if any_use_shift
 
-        std::array<CCTK_REAL, maxncomps> vals;
+        std::array<T, maxncomps> vals;
         for (int comp = 0; comp < ncomps; ++comp)
           vals[comp] = call_stencil_3d(
               [&](const int di, const int dj, const int dk)
@@ -1985,7 +1986,7 @@ void prolongate_3d_rf2<
                 return interp1d<CENTK, INTPK, ORDERK>()(crse, shift[2], off[2]);
               });
 
-        std::array<CCTK_REAL, maxncomps> ress;
+        std::array<T, maxncomps> ress;
 
         if constexpr (FB == FB_NONE || ((INTPI != CONS || ORDERI <= 1) &&
                                         (INTPJ != CONS || ORDERJ <= 1) &&
@@ -2007,7 +2008,7 @@ void prolongate_3d_rf2<
             const std::array<int, 2> sradk =
                 interp1d<CENTK, INTPK, ORDERK>().stencil_radius(shift[2],
                                                                 off[2]);
-            CCTK_REAL minval = +1 / CCTK_REAL(0), maxval = -1 / CCTK_REAL(0);
+            T minval = +1 / T(0), maxval = -1 / T(0);
             for (int comp = 0; comp < ncomps; ++comp) {
               for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                 for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
@@ -2032,7 +2033,7 @@ void prolongate_3d_rf2<
                     // const bool s0 = signbit(
                     //     crse(icrse[0] + 1, icrse[1] + dj, icrse[2] + dk) -
                     //     crse(icrse[0] + 0, icrse[1] + dj, icrse[2] + dk));
-                    const CCTK_REAL s0 =
+                    const T s0 =
                         crse(icrse[0] + 1, icrse[1] + dj, icrse[2] + dk, comp) -
                         crse(icrse[0] + 0, icrse[1] + dj, icrse[2] + dk, comp);
                     for (int di = sradi[0] + 2; di <= sradi[1]; ++di) {
@@ -2041,7 +2042,7 @@ void prolongate_3d_rf2<
                       //     crse(icrse[0] + (di - 1), icrse[1] + dj,
                       //          icrse[2] + dk));
                       // need_fallback_i |= s != s0;
-                      const CCTK_REAL s =
+                      const T s =
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk,
                                comp) -
                           crse(icrse[0] + (di - 1), icrse[1] + dj,
@@ -2063,7 +2064,7 @@ void prolongate_3d_rf2<
                     // const bool s0 = signbit(
                     //     crse(icrse[0] + di, icrse[1] + 1, icrse[2] + dk) -
                     //     crse(icrse[0] + di, icrse[1] + 0, icrse[2] + dk));
-                    const CCTK_REAL s0 =
+                    const T s0 =
                         crse(icrse[0] + di, icrse[1] + 1, icrse[2] + dk, comp) -
                         crse(icrse[0] + di, icrse[1] + 0, icrse[2] + dk, comp);
                     for (int dj = sradj[0] + 2; dj <= sradj[1]; ++dj) {
@@ -2072,7 +2073,7 @@ void prolongate_3d_rf2<
                       //     crse(icrse[0] + di, icrse[1] + (dj - 1),
                       //          icrse[2] + dk));
                       // need_fallback_j |= s != s0;
-                      const CCTK_REAL s =
+                      const T s =
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk,
                                comp) -
                           crse(icrse[0] + di, icrse[1] + (dj - 1),
@@ -2094,7 +2095,7 @@ void prolongate_3d_rf2<
                     // const bool s0 = signbit(
                     //     crse(icrse[0] + di, icrse[1] + dj, icrse[2] + 1) -
                     //     crse(icrse[0] + di, icrse[1] + dj, icrse[2] + 0));
-                    const CCTK_REAL s0 =
+                    const T s0 =
                         crse(icrse[0] + di, icrse[1] + dj, icrse[2] + 1, comp) -
                         crse(icrse[0] + di, icrse[1] + dj, icrse[2] + 0, comp);
                     for (int dk = sradk[0] + 2; dk <= sradk[1]; ++dk) {
@@ -2103,7 +2104,7 @@ void prolongate_3d_rf2<
                       //     crse(icrse[0] + di, icrse[1] + dj,
                       //          icrse[2] + (dk - 1)));
                       // need_fallback_k |= s != s0;
-                      const CCTK_REAL s = crse(icrse[0] + di, icrse[1] + dj,
+                      const T s = crse(icrse[0] + di, icrse[1] + dj,
                                                icrse[2] + dk, comp) -
                                           crse(icrse[0] + di, icrse[1] + dj,
                                                icrse[2] + (dk - 1), comp);
@@ -2119,7 +2120,7 @@ void prolongate_3d_rf2<
           constexpr int LINORDERI = INTPI == CONS ? 1 : ORDERI;
           constexpr int LINORDERJ = INTPJ == CONS ? 1 : ORDERJ;
           constexpr int LINORDERK = INTPK == CONS ? 1 : ORDERK;
-          std::array<CCTK_REAL, maxncomps> val_lins;
+          std::array<T, maxncomps> val_lins;
           for (int comp = 0; comp < ncomps; ++comp) {
             val_lins[comp] = call_stencil_3d(
                 [&](const int di, const int dj, const int dk) {
@@ -2166,16 +2167,16 @@ void prolongate_3d_rf2<
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
 void prolongate_3d_rf2<
-    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK,
-    FB>::interp(const amrex::FArrayBox &crse_box, const int crse_comp,
-                amrex::FArrayBox &fine_box, const int fine_comp,
-                const int ncomps, const amrex::Box &fine_region,
-                const amrex::IntVect &ratio, const amrex::Geometry &crse_geom,
-                const amrex::Geometry &fine_geom,
-                amrex::Vector<amrex::BCRec> const &bcr, const int actual_comp,
-                const int actual_state, const amrex::RunOn gpu_or_cpu) {
+    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK, FB,
+    T>::interp(const amrex::BaseFab<T> &crse_box, const int crse_comp,
+              amrex::BaseFab<T> &fine_box, const int fine_comp,
+              const int ncomps, const amrex::Box &fine_region,
+              const amrex::IntVect &ratio, const amrex::Geometry &crse_geom,
+              const amrex::Geometry &fine_geom,
+              amrex::Vector<amrex::BCRec> const &bcr, const int actual_comp,
+              const int actual_state, const amrex::RunOn gpu_or_cpu) {
   DECLARE_CCTK_PARAMETERS;
   if (!prolongate_per_group)
     interp_per_var(crse_box, crse_comp, fine_box, fine_comp, ncomps,
@@ -2189,18 +2190,18 @@ void prolongate_3d_rf2<
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
 void prolongate_3d_rf2<
-    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK,
-    FB>::interp_face(const amrex::FArrayBox &crse, const int crse_comp,
-                     amrex::FArrayBox &fine, const int fine_comp,
-                     const int ncomp, const amrex::Box &fine_region,
-                     const amrex::IntVect &ratio,
-                     const amrex::IArrayBox &solve_mask,
-                     const amrex::Geometry &crse_geom,
-                     const amrex::Geometry &fine_geom,
-                     amrex::Vector<amrex::BCRec> const &bcr, const int bccomp,
-                     const amrex::RunOn gpu_or_cpu) {
+    CENTI, CENTJ, CENTK, INTPI, INTPJ, INTPK, ORDERI, ORDERJ, ORDERK, FB,
+    T>::interp_face(const amrex::BaseFab<T> &crse, const int crse_comp,
+                    amrex::BaseFab<T> &fine, const int fine_comp,
+                    const int ncomp, const amrex::Box &fine_region,
+                    const amrex::IntVect &ratio,
+                    const amrex::IArrayBox &solve_mask,
+                    const amrex::Geometry &crse_geom,
+                    const amrex::Geometry &fine_geom,
+                    amrex::Vector<amrex::BCRec> const &bcr, const int bccomp,
+                    const amrex::RunOn gpu_or_cpu) {
   // solve_mask; ???
   assert(bccomp == 0); // ???
   interp(crse, crse_comp, fine, fine_comp, ncomp, fine_region, ratio, crse_geom,

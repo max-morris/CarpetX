@@ -1,6 +1,7 @@
 #ifndef CARPETX_CARPETX_DRIVER_HXX
 #define CARPETX_CARPETX_DRIVER_HXX
 
+#include "interp_base.hxx"
 #include "loop.hxx"
 #include "valid.hxx"
 
@@ -440,7 +441,20 @@ struct GHExt {
         std::array<int, dim> indextype;
         std::array<int, dim> nghostzones;
 
-        amrex::Interpolater *interpolator;
+        // Prolongation operator for this group, selected (once, at
+        // construction, from `vartype`) from the precision-appropriate
+        // static instance table in prolongate_3d_rf2_impl_*.cxx via
+        // get_interpolator_t<T>() (driver.cxx). Exactly one of
+        // `interpolator_real8`/`interpolator_real4` is non-null for any
+        // given group -- REAL/REAL8 (amrex::MultiFab-backed) groups get
+        // `interpolator_real8`, CCTK_REAL4 (amrex::fMultiFab-backed) ones
+        // get `interpolator_real4` -- mirroring AnyMultiFab's own
+        // precision split. fillpatch.cxx's templated FillPatch_*<MF>
+        // functions and their callers (schedule.cxx, driver.cxx's
+        // MakeNewLevelFromCoarse/RemakeLevel) select whichever of these two
+        // matches the group's AnyMultiFab alternative.
+        InterpolaterT<CCTK_REAL> *interpolator_real8 = nullptr;
+        InterpolaterT<CCTK_REAL4> *interpolator_real4 = nullptr;
 
         std::array<std::array<boundary_t, dim>, 2> boundaries;
         bool all_faces_have_symmetries_or_boundaries() const;

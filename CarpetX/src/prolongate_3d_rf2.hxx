@@ -2,8 +2,7 @@
 #define CARPETX_CARPETX_PROLONGATE_3D_RF2_HXX
 
 #include "driver.hxx"
-
-#include <AMReX_Interpolater.H>
+#include "interp_base.hxx"
 
 #include <array>
 #include <cassert>
@@ -32,8 +31,8 @@ constexpr auto FB_LINEAR = fallback_t::linear;
 
 template <centering_t CENTI, centering_t CENTJ, centering_t CENTK,
           interpolation_t INTPI, interpolation_t INTPJ, interpolation_t INTPK,
-          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB>
-class prolongate_3d_rf2 final : public amrex::Interpolater {
+          int ORDERI, int ORDERJ, int ORDERK, fallback_t FB, typename T>
+class prolongate_3d_rf2 final : public InterpolaterT<T> {
 
   // Centering must be vertex (0) or cell (1)
   static_assert(CENTI == VC || CENTI == CC);
@@ -82,16 +81,16 @@ public:
 #ifndef AMREX_USE_GPU
 private:
 #endif
-  void interp_per_var(const amrex::FArrayBox &crse, int crse_comp,
-                      amrex::FArrayBox &fine, int fine_comp, int ncomp,
+  void interp_per_var(const amrex::BaseFab<T> &crse, int crse_comp,
+                      amrex::BaseFab<T> &fine, int fine_comp, int ncomp,
                       const amrex::Box &fine_region,
                       const amrex::IntVect &ratio,
                       const amrex::Geometry &crse_geom,
                       const amrex::Geometry &fine_geom,
                       amrex::Vector<amrex::BCRec> const &bcr, int actual_comp,
                       int actual_state, amrex::RunOn gpu_or_cpu);
-  void interp_per_group(const amrex::FArrayBox &crse, int crse_comp,
-                        amrex::FArrayBox &fine, int fine_comp, int ncomp,
+  void interp_per_group(const amrex::BaseFab<T> &crse, int crse_comp,
+                        amrex::BaseFab<T> &fine, int fine_comp, int ncomp,
                         const amrex::Box &fine_region,
                         const amrex::IntVect &ratio,
                         const amrex::Geometry &crse_geom,
@@ -100,8 +99,8 @@ private:
                         int actual_state, amrex::RunOn gpu_or_cpu);
 
 public:
-  virtual void interp(const amrex::FArrayBox &crse, int crse_comp,
-                      amrex::FArrayBox &fine, int fine_comp, int ncomp,
+  virtual void interp(const amrex::BaseFab<T> &crse, int crse_comp,
+                      amrex::BaseFab<T> &fine, int fine_comp, int ncomp,
                       const amrex::Box &fine_region,
                       const amrex::IntVect &ratio,
                       const amrex::Geometry &crse_geom,
@@ -109,8 +108,8 @@ public:
                       amrex::Vector<amrex::BCRec> const &bcr, int actual_comp,
                       int actual_state, amrex::RunOn gpu_or_cpu) override;
 
-  virtual void interp_face(const amrex::FArrayBox &crse, int crse_comp,
-                           amrex::FArrayBox &fine, int fine_comp, int ncomp,
+  virtual void interp_face(const amrex::BaseFab<T> &crse, int crse_comp,
+                           amrex::BaseFab<T> &fine, int fine_comp, int ncomp,
                            const amrex::Box &fine_region,
                            const amrex::IntVect &ratio,
                            const amrex::IArrayBox &solve_mask,
@@ -122,59 +121,67 @@ public:
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// Polynomial (Lagrange) interpolation
+// Precision-parameterized prolongation operator tables.
+//
+// Each family below used to be a single `extern const std::map<int,
+// std::array<amrex::Interpolater *, 8>>` (order -> 8 centering-combination
+// instances), built once at namespace scope in the corresponding
+// prolongate_3d_rf2_impl_*.cxx file. Since prolongate_3d_rf2 is now
+// templated on the storage precision T (see above) and derives from
+// InterpolaterT<T> rather than from amrex::Interpolater, each table gains a
+// T axis: `name##_table<T>()` returns a reference to a map of
+// InterpolaterT<T>* built (once, on first use) for that T. Both T=CCTK_REAL
+// and T=CCTK_REAL4 are explicitly instantiated in the _impl_*.cxx files
+// (`extern template` here suppresses any other, implicit instantiation).
+#define CARPETX_DECLARE_PROLONGATE_TABLE(name)                              \
+  template <typename T>                                                     \
+  const std::map<int, std::array<InterpolaterT<T> *, 8> > &name##_table();  \
+  extern template const std::map<int,                                      \
+                                 std::array<InterpolaterT<CCTK_REAL> *, 8> > \
+      &name##_table<CCTK_REAL>();                                          \
+  extern template const std::map<                                          \
+      int, std::array<InterpolaterT<CCTK_REAL4> *, 8> > &                   \
+      name##_table<CCTK_REAL4>()
 
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_poly_3d_rf2;
+// Polynomial (Lagrange) interpolation
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_poly_3d_rf2);
 
 // Conservative interpolation
-
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_cons_3d_rf2;
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_cons_3d_rf2);
 
 // DDF interpolation
 
 // Prolongation operators for discrete differential forms:
 // interpolating (non-conservative) for vertex centred directions,
 // conservative (with one order lower) for cell centred directions.
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_ddf_3d_rf2;
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_ddf_3d_rf2);
 
 // Natural interpolation
 
 // Interpolate (non-conservatively) for vertex centred directions,
 // conservative for cell centred directions.
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_natural_3d_rf2;
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_natural_3d_rf2);
 
 // ENO (tensor product) interpolation
-
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_eno_3d_rf2;
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_eno_3d_rf2);
 
 // Minmod (tensor product) interpolation
-
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_minmod_3d_rf2;
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_minmod_3d_rf2);
 
 // Hermite interpolation
-
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_hermite_3d_rf2;
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_hermite_3d_rf2);
 
 // Interpolate polynomially in vertex centred directions and conserve
 // with 3rd order accuracy and a linear fallback in cell centred
 // directions
-
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_poly_cons3lfb_3d_rf2;
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_poly_cons3lfb_3d_rf2);
 
 // Interpolate polynomially in vertex centred directions and use ENO
 // interpolation with 3rd order accuracy and a linear fallback in cell
 // centred directions
+CARPETX_DECLARE_PROLONGATE_TABLE(prolongate_poly_eno3lfb_3d_rf2);
 
-extern const std::map<int, std::array<amrex::Interpolater *, 8> >
-    prolongate_poly_eno3lfb_3d_rf2;
+#undef CARPETX_DECLARE_PROLONGATE_TABLE
 
 } // namespace CarpetX
 
