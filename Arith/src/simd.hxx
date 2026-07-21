@@ -1575,4 +1575,16 @@ using CCTK_BOOLVEC = Arith::simdl<CCTK_REAL>;
 using CCTK_REALVEC = Arith::simd<CCTK_REAL>;
 constexpr std::size_t CCTK_VECSIZE = std::tuple_size_v<CCTK_REALVEC>;
 
+// Sized-type vector aliases, for mixed-precision code that needs to name a
+// specific storage precision instead of the configured CCTK_REAL
+using CCTK_BOOLVEC4 = Arith::simdl<CCTK_REAL4>;
+using CCTK_REAL4VEC = Arith::simd<CCTK_REAL4>;
+constexpr std::size_t CCTK_VECSIZE4 = std::tuple_size_v<CCTK_REAL4VEC>;
+
+// CCTK_REAL8 is CCTK_REAL in this build configuration; these are simply
+// aliases of the above for symmetry
+using CCTK_BOOLVEC8 = CCTK_BOOLVEC;
+using CCTK_REAL8VEC = CCTK_REALVEC;
+constexpr std::size_t CCTK_VECSIZE8 = CCTK_VECSIZE;
+
 #endif // #ifndef CARPETX_ARITH_SIMD_HXX
