@@ -80,14 +80,19 @@ MPI_Op reduction_mpi_op() {
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace {
-template <typename T>
-reduction<T, dim>
-reduce_array(const amrex::Array4<const T> &restrict vars, const int n,
+// Templated on the *source* array element type SrcT (CCTK_REAL for
+// REAL/REAL8 groups, CCTK_REAL4 for CCTK_REAL4 groups). The accumulator
+// always uses CCTK_REAL, i.e. CCTK_REAL4 source data is read and summed in
+// double precision; the reduction result type is therefore unchanged by the
+// group's storage precision.
+template <typename SrcT>
+reduction<CCTK_REAL, dim>
+reduce_array(const amrex::Array4<const SrcT> &restrict vars, const int n,
              const vect<int, dim> &tmin, const vect<int, dim> &tmax,
              const vect<int, dim> &indextype, const vect<int, dim> &imin,
              const vect<int, dim> &imax,
              const amrex::Array4<const int> *restrict const finemask,
-             const vect<T, dim> &x0, const vect<T, dim> &dx) {
+             const vect<CCTK_REAL, dim> &x0, const vect<CCTK_REAL, dim> &dx) {
   constexpr vect<vect<int, dim>, dim> di = {vect<int, dim>::unit(0),
                                             vect<int, dim>::unit(1),
                                             vect<int, dim>::unit(2)};
@@ -106,12 +111,12 @@ reduce_array(const amrex::Array4<const T> &restrict vars, const int n,
   const CCTK_REAL dV = prod(dx);
 
   // Use per-loop reduction objects to reduce round-off error
-  reduction<T, dim> redk;
+  reduction<CCTK_REAL, dim> redk;
   // TODO: use loop.hxx code to loop over grid
   for (int k = tmin[2]; k < tmax[2]; ++k) {
-    reduction<T, dim> redj;
+    reduction<CCTK_REAL, dim> redj;
     for (int j = tmin[1]; j < tmax[1]; ++j) {
-      reduction<T, dim> redi;
+      reduction<CCTK_REAL, dim> redi;
       for (int i = tmin[0]; i < tmax[0]; ++i) {
         const vect<int, dim> ipos = {i, j, k};
 
@@ -141,10 +146,11 @@ reduce_array(const amrex::Array4<const T> &restrict vars, const int n,
 
         const std::bitset<8> active = outer_active & inner_active;
         if (active.any()) {
-          const T W = active.count() / T(active.size());
+          const CCTK_REAL W = active.count() / CCTK_REAL(active.size());
 
-          const vect<T, dim> x = x0 + ipos * dx;
-          redi += reduction<T, dim>(x, W * dV, vars(i, j, k, n));
+          const vect<CCTK_REAL, dim> x = x0 + ipos * dx;
+          redi += reduction<CCTK_REAL, dim>(x, W * dV,
+                                            CCTK_REAL(vars(i, j, k, n)));
         }
       }
       redj += redi;
@@ -153,26 +159,23 @@ reduce_array(const amrex::Array4<const T> &restrict vars, const int n,
   }
   return redk;
 }
-} // namespace
 
-reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
-  DECLARE_CCTK_PARAMETERS;
-
-  cGroup group;
-  int ierr = CCTK_GroupData(gi, &group);
-  assert(!ierr);
-  assert(group.grouptype == CCTK_GF);
-  if (vartype_is_real4(group.vartype))
-    CCTK_VERROR("Reductions are not yet supported for CCTK_REAL4 grid "
-               "function group %s",
-               CCTK_FullGroupName(gi));
+// Templated on the AMReX FabArray specialization MF (amrex::MultiFab for
+// REAL/REAL8 groups, amrex::fMultiFab for CCTK_REAL4 groups; same pattern as
+// fillpatch.hxx's FillPatch_* functions). The source element type is
+// `typename MF::value_type`; the reduction result is always accumulated (and
+// MPI-reduced) in CCTK_REAL, so this returns the same result type for both
+// storage precisions.
+template <typename MF>
+reduction<CCTK_REAL, dim> reduce_typed(int gi, int vi, int tl) {
+  using SrcT = typename MF::value_type;
 
   reduction<CCTK_REAL, dim> red;
   // TODO: Parallelize over patches and levels
   for (auto &restrict patchdata : ghext->patchdata) {
     for (auto &restrict leveldata : patchdata.leveldata) {
       const auto &restrict groupdata = *leveldata.groupdata.at(gi);
-      const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab.at(tl));
+      const MF &mfab = std::get<MF>(*groupdata.mfab.at(tl));
       std::unique_ptr<amrex::iMultiFab> finemask_imfab;
 
       warn_if_invalid(groupdata, vi, tl, make_valid_int(),
@@ -192,8 +195,7 @@ reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
         const auto &restrict fine_leveldata =
             patchdata.leveldata.at(fine_level);
         const auto &restrict fine_groupdata = *fine_leveldata.groupdata.at(gi);
-        const amrex::MultiFab &fine_mfab =
-            as_mfab_real(*fine_groupdata.mfab.at(tl));
+        const MF &fine_mfab = std::get<MF>(*fine_groupdata.mfab.at(tl));
 
         const amrex::IntVect reffact{2, 2, 2};
 
@@ -227,7 +229,7 @@ reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
           const vect<int, dim> imax{vbx.bigEnd(0) + 1, vbx.bigEnd(1) + 1,
                                     vbx.bigEnd(2) + 1};
 
-          const amrex::Array4<const CCTK_REAL> &vars = mfab.array(mfi);
+          const amrex::Array4<const SrcT> &vars = mfab.array(mfi);
 
           std::unique_ptr<amrex::Array4<const int> > finemask;
           if (finemask_imfab) {
@@ -242,8 +244,8 @@ reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
             assert(finemask->end.z == vars.end.z);
           }
 
-          red += reduce_array(vars, vi, tmin, tmax, indextype, imin, imax,
-                              finemask.get(), x0, dx);
+          red += reduce_array<SrcT>(vars, vi, tmin, tmax, indextype, imin,
+                                    imax, finemask.get(), x0, dx);
         }
 #ifdef __NVCOMPILER
 #pragma omp critical (CarpetX_reduce)
@@ -258,6 +260,25 @@ reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
   MPI_Allreduce(MPI_IN_PLACE, &red, 1, datatype, op, MPI_COMM_WORLD);
 
   return red;
+}
+
+} // namespace
+
+reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
+  DECLARE_CCTK_PARAMETERS;
+
+  cGroup group;
+  int ierr = CCTK_GroupData(gi, &group);
+  assert(!ierr);
+  assert(group.grouptype == CCTK_GF);
+
+  // Dispatch on the group's storage precision. The source array element
+  // type differs (CCTK_REAL4 vs. CCTK_REAL), but the accumulator and
+  // MPI-reduced result always use CCTK_REAL (see reduce_typed above), so the
+  // returned reduction<CCTK_REAL, dim> is identical in shape for both.
+  if (vartype_is_real4(group.vartype))
+    return reduce_typed<amrex::fMultiFab>(gi, vi, tl);
+  return reduce_typed<amrex::MultiFab>(gi, vi, tl);
 }
 
 } // namespace CarpetX
