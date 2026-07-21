@@ -2,6 +2,7 @@
 #include "fillpatch.hxx"
 #include "io.hxx"
 #include "loop.hxx"
+#include "restrict_edges.hxx"
 #include "schedule.hxx"
 #include "task_manager.hxx"
 #include "timer.hxx"
@@ -2827,25 +2828,26 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
               // MultiFab-specific (not FAB-templated) overload, unlike
               // average_down_nodal/average_down/average_down_faces; there
               // is no way to restrict edge-centered CCTK_REAL2 data with
-              // AMReX 25.11 (same limitation as CCTK_REAL4 below).
-              // average_down_nodal/average_down_faces/average_down
-              // themselves are FAB-templated and were verified to compile
-              // and do their arithmetic correctly for
+              // AMReX 25.11's own average_down_edges (same limitation as
+              // CCTK_REAL4 below). average_down_nodal/average_down_faces/
+              // average_down themselves are FAB-templated and were
+              // verified to compile and do their arithmetic correctly for
               // amrex::BaseFab<CCTK_REAL2> (== amrex::BaseFab<_Float16>), so
               // no compute-type fallback is needed here (unlike some other
               // REAL2 numerics sites might require, see D5).
-              if (rank == 1)
-                CCTK_VERROR(
-                    "Edge-centered restriction is not yet supported for "
-                    "CCTK_REAL2 grid function group %s (amrex::"
-                    "average_down_edges is not templated on the FAB type "
-                    "in the installed AMReX version)",
-                    groupdata.groupname.c_str());
+              //
+              // Interim: local FAB-templated edge average-down. Upstream
+              // goal: template amrex::average_down_edges over FAB
+              // (mirroring average_down_faces); drop this kernel when the
+              // ET's AMReX includes that.
               auto &finemfab = std::get<hMultiFab>(*finegroupdata.mfab.at(tl));
               auto &crsemfab = std::get<hMultiFab>(*groupdata.mfab.at(tl));
               switch (rank) {
               case 0:
                 average_down_nodal(finemfab, crsemfab, reffact);
+                break;
+              case 1:
+                average_down_edges(finemfab, crsemfab, reffact);
                 break;
               case 2:
                 average_down_faces(finemfab, crsemfab, reffact);
@@ -2864,14 +2866,12 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
               // MultiFab-specific (not FAB-templated) overload, unlike
               // average_down_nodal/average_down/average_down_faces; there
               // is no way to restrict edge-centered CCTK_REAL4 data with
-              // AMReX 25.11.
-              if (rank == 1)
-                CCTK_VERROR(
-                    "Edge-centered restriction is not yet supported for "
-                    "CCTK_REAL4 grid function group %s (amrex::"
-                    "average_down_edges is not templated on the FAB type "
-                    "in the installed AMReX version)",
-                    groupdata.groupname.c_str());
+              // AMReX 25.11's own average_down_edges.
+              //
+              // Interim: local FAB-templated edge average-down. Upstream
+              // goal: template amrex::average_down_edges over FAB
+              // (mirroring average_down_faces); drop this kernel when the
+              // ET's AMReX includes that.
               auto &finemfab =
                   std::get<amrex::fMultiFab>(*finegroupdata.mfab.at(tl));
               auto &crsemfab =
@@ -2879,6 +2879,9 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
               switch (rank) {
               case 0:
                 average_down_nodal(finemfab, crsemfab, reffact);
+                break;
+              case 1:
+                average_down_edges(finemfab, crsemfab, reffact);
                 break;
               case 2:
                 average_down_faces(finemfab, crsemfab, reffact);
