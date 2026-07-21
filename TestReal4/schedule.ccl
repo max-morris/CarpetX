@@ -108,8 +108,8 @@ SCHEDULE TestReal4_2Lev_Sync AT postregrid
   SYNC: state8 state4
   SYNC: state8_2lev state4_2lev
   SYNC: state8_bc state4_bc
-  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
-} "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written"
+  SYNC: state8_evol state4_evol
+} "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written. rhs8_evol/rhs4_evol are deliberately excluded: they are TAGS='checkpoint=\"no\"' scratch groups that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing them here would trip the sync precondition on their invalid new-level interior; they are recomputed every ODESolvers RHS evaluation and never need to survive a regrid/restrict"
 
 SCHEDULE TestReal4_2Lev_Sync AT postrestrict
 {
@@ -117,8 +117,8 @@ SCHEDULE TestReal4_2Lev_Sync AT postrestrict
   SYNC: state8 state4
   SYNC: state8_2lev state4_2lev
   SYNC: state8_bc state4_bc
-  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
-} "Sync all test groups after restriction, for the same reason as the postregrid item above"
+  SYNC: state8_evol state4_evol
+} "Sync all test groups after restriction, for the same reason as the postregrid item above (rhs8_evol/rhs4_evol excluded for the same reason)"
 
 if (run_2lev_test)
 {
