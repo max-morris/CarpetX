@@ -149,9 +149,12 @@ void WriteTSVold(const cGH *restrict cctkGH, const std::string &filename,
       const auto &groupdata = *leveldata.groupdata.at(gi);
       const int tl = 0;
       const auto &geom = patchdata.amrcore->Geom(leveldata.level);
-      const auto &mfab = as_mfab_real(*groupdata.mfab.at(tl));
+      // Generic in the group's storage precision (CCTK_REAL or float);
+      // values are read through a pointer of the correct type and widened to
+      // CCTK_REAL only for text formatting.
+      std::visit([&](const auto &mfab) {
       for (amrex::MFIter mfi(mfab); mfi.isValid(); ++mfi) {
-        const amrex::Array4<const CCTK_REAL> &vars = mfab.array(mfi);
+        const auto &vars = mfab.array(mfi);
         const auto &imin = vars.begin;
         const auto &imax = vars.end;
         for (int k = imin.z; k < imax.z; ++k) {
@@ -168,12 +171,13 @@ void WriteTSVold(const cGH *restrict cctkGH, const std::string &filename,
                    << mfi.index() << sep << I[0] << sep << I[1] << sep << I[2]
                    << sep << x[0] << sep << x[1] << sep << x[2];
               for (int n = 0; n < groupdata.numvars; ++n)
-                file << sep << vars(i, j, k, n);
+                file << sep << CCTK_REAL(vars(i, j, k, n));
               file << "\n";
             }
           }
         }
       }
+      }, *groupdata.mfab.at(tl)); // std::visit
     }
   }
 
@@ -205,15 +209,7 @@ void OutputTSVold(const cGH *restrict cctkGH) {
     auto &restrict groupdata0 =
         *ghext->patchdata.at(0).leveldata.at(0).groupdata.at(gi);
     if (groupdata0.mfab.size() > 0) {
-      if (vartype_is_real4(groupdata0.vartype)) {
-        static std::set<int> warned_groups;
-        if (warned_groups.insert(gi).second)
-          CCTK_VWARN(CCTK_WARN_ALERT,
-                    "TSV output is not yet supported for CCTK_REAL4 grid "
-                    "function group %s, skipping",
-                    groupdata0.groupname.c_str());
-        continue;
-      }
+      assert(vartype_is_supported_real(groupdata0.vartype));
       const int tl = 0;
 
       std::string groupname = CCTK_FullGroupName(gi);
@@ -464,15 +460,7 @@ void WriteTSVGFs(const cGH *restrict cctkGH, const std::string &filename,
                  const bool output_boundary_points) {
   const auto &groupdata0 =
       *ghext->patchdata.at(0).leveldata.at(0).groupdata.at(gi);
-  if (vartype_is_real4(groupdata0.vartype)) {
-    static std::set<int> warned_groups;
-    if (warned_groups.insert(gi).second)
-      CCTK_VWARN(CCTK_WARN_ALERT,
-                "TSV output is not yet supported for CCTK_REAL4 grid "
-                "function group %s, skipping",
-                groupdata0.groupname.c_str());
-    return;
-  }
+  assert(vartype_is_supported_real(groupdata0.vartype));
 
   // Number of values transmitted per grid point
   const int nintvalues = 1                  // patch
@@ -514,13 +502,16 @@ void WriteTSVGFs(const cGH *restrict cctkGH, const std::string &filename,
 
       const auto &symmetries = ghext->patchdata.at(leveldata.patch).symmetries;
 
-      const auto &mfab = as_mfab_real(*groupdata.mfab.at(tl));
-
+      // The mfi loop below is generic in the grid function group's storage
+      // precision (CCTK_REAL for REAL/REAL8 groups, float for REAL4 groups):
+      // values are read through a pointer of the correct type and widened to
+      // CCTK_REAL only when appended to the (text-output) `data` buffer.
+      std::visit([&](const auto &mfab) {
       const vect<int, dim> nghosts = {mfab.nGrow(0), mfab.nGrow(1),
                                       mfab.nGrow(2)};
 
       for (amrex::MFIter mfi(mfab); mfi.isValid(); ++mfi) {
-        const amrex::Array4<const CCTK_REAL> &vars = mfab.array(mfi);
+        const auto &vars = mfab.array(mfi);
 
         const amrex::Box &vbx =
             mfi.validbox(); // interior region (without ghosts)
@@ -579,6 +570,7 @@ void WriteTSVGFs(const cGH *restrict cctkGH, const std::string &filename,
           }
         } // if output_something
       } // for mfi
+      }, *groupdata.mfab.at(tl)); // std::visit
     } // for leveldata
   } // for patchdata
   assert(data.size() % nvalues == 0);

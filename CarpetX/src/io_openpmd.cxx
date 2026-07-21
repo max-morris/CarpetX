@@ -869,11 +869,7 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
           assert(!ierr);
           if (cgroup.grouptype != CCTK_GF)
             continue;
-          if (vartype_is_real4(cgroup.vartype))
-            CCTK_VERROR("openPMD input is not yet supported for CCTK_REAL4 "
-                       "grid function group %s",
-                       CCTK_FullGroupName(gi));
-          assert(vartype_is_real8(cgroup.vartype));
+          assert(vartype_is_supported_real(cgroup.vartype));
           assert(cgroup.dim == 3);
           // cGroupDynamicData cgroupdynamicdata;
           // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -888,11 +884,21 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
           // const int firstvarindex = groupdata.firstvarindex;
           const int numvars = groupdata.numvars;
           const int tl = 0;
-          amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
+          const bool group_has_no_ghosts = groupdata.nghostzones[0] == 0 &&
+                                           groupdata.nghostzones[1] == 0 &&
+                                           groupdata.nghostzones[2] == 0;
+
+          // The body below is generic in the grid function group's storage
+          // precision T (CCTK_REAL for REAL/REAL8 groups, float for REAL4
+          // groups); `mfab` is either an amrex::MultiFab or an
+          // amrex::fMultiFab, matching the group's AnyMultiFab alternative.
+          const auto read_group = [&](auto &mfab) {
+          using T = typename std::decay_t<decltype(mfab)>::value_type;
           const amrex::IndexType &indextype = mfab.ixType();
           const Arith::vect<bool, 3> is_cell_centred{indextype.cellCentered(0),
                                                      indextype.cellCentered(1),
                                                      indextype.cellCentered(2)};
+          (void)is_cell_centred;
 
           const int num_local_components = mfab.local_size();
 
@@ -932,10 +938,6 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
             CCTK_VINFO("Reading %d variables with %d components...", numvars,
                        num_local_components);
 
-          const bool group_has_no_ghosts = groupdata.nghostzones[0] == 0 &&
-                                           groupdata.nghostzones[1] == 0 &&
-                                           groupdata.nghostzones[2] == 0;
-
           // Loop over components (AMReX boxes)
           for (int local_component = 0; local_component < num_local_components;
                ++local_component) {
@@ -972,11 +974,11 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
             for (int d = 0; d < 3; ++d)
               assert(start.at(d) + count.at(d) <= extent.at(d));
 
-            amrex::FArrayBox &fab = mfab[component];
+            auto &fab = mfab[component];
             for (int vi = 0; vi < numvars; ++vi) {
 
               if (input_ghosts || intbox == extbox) {
-                CCTK_REAL *const ptr = fab.dataPtr() + vi * np;
+                T *const ptr = fab.dataPtr() + vi * np;
 #if OPENPMDAPI_VERSION_GE(0, 15, 0)
                 record_components.at(vi).loadChunkRaw(ptr, start, count);
 #else
@@ -986,44 +988,30 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
 
               } else {
                 const int amrex_size = extbox.size();
-                CCTK_REAL *const amrex_var_ptr =
-                    fab.dataPtr() + vi * amrex_size;
+                T *const amrex_var_ptr = fab.dataPtr() + vi * amrex_size;
                 const Arith::vect<int, 3> amrex_shape = extbox.shape();
                 const Arith::vect<int, 3> amrex_offset = box.lo - extbox.lo;
                 constexpr int amrex_di = 1;
                 const int amrex_dj = amrex_di * amrex_shape[0];
                 const int amrex_dk = amrex_dj * amrex_shape[1];
                 // const int amrex_np = amrex_dk * amrex_shape[2];
-                CCTK_REAL *const amrex_ptr =
-                    amrex_var_ptr + amrex_di * amrex_offset[0] +
-                    amrex_dj * amrex_offset[1] + amrex_dk * amrex_offset[2];
+                T *const amrex_ptr = amrex_var_ptr + amrex_di * amrex_offset[0] +
+                                     amrex_dj * amrex_offset[1] +
+                                     amrex_dk * amrex_offset[2];
                 const Arith::vect<int, 3> contig_shape = box.shape();
                 constexpr int contig_di = 1;
                 const int contig_dj = contig_di * contig_shape[0];
                 const int contig_dk = contig_dj * contig_shape[1];
                 const int contig_np = contig_dk * contig_shape[2];
                 assert(contig_np == np);
-#if 1
-                CCTK_REAL *const contig_ptr =
+                T *const contig_ptr =
                     amrex_var_ptr + extbox.size() - box.size();
                 // TODO: optimize memory layout
-#if 0
-                CCTK_REAL *const contig_ptr =
-                    ptr + contig_di * (contig_shape[0] - 1) +
-                    contig_dj * (contig_shape[1] - 1) +
-                    contig_dk * (contig_shape[2] - 1) + 1 - contig_np;
-                assert(&amrex_ptr[amrex_di * (amrex_shape[0] - 1) +
-                                  amrex_dj * (amrex_shape[1] - 1) +
-                                  amrex_dk * (amrex_shape[2] - 1)] ==
-                       &contig_ptr[contig_di * (contig_shape[0] - 1) +
-                                   contig_dj * (contig_shape[1] - 1) +
-                                   contig_dk * (contig_shape[2] - 1)]);
-#endif
                 if (poison_undefined_values) {
-                  const CCTK_REAL poison = get_poison();
+                  const poison_value_t<T> poison_value;
 #pragma omp simd
                   for (int n = 0; n < np; ++n)
-                    contig_ptr[n] = poison;
+                    poison_value.set_to_poison(contig_ptr[n]);
                 }
                 record_components.at(vi).loadChunkRaw(contig_ptr, start, count);
                 tasks.emplace_back([=]() {
@@ -1034,30 +1022,16 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                             contig_ptr[contig_di * i + contig_dj * j +
                                        contig_dk * k];
                 });
-#else
-                CCTK_REAL *const contig_ptr = new CCTK_REAL[np];
-                if (poison_undefined_values) {
-                  const CCTK_REAL poison = get_poison();
-#pragma omp simd
-                  for (int n = 0; n < np; ++n)
-                    contig_ptr[n] = poison;
-                }
-                record_components.at(vi).loadChunkRaw(contig_ptr, start, count);
-                tasks.emplace_back([=]() {
-                  for (int k = 0; k < contig_shape[2]; ++k)
-                    for (int j = 0; j < contig_shape[1]; ++j)
-#pragma omp simd
-                      for (int i = 0; i < contig_shape[0]; ++i)
-                        amrex_ptr[amrex_di * i + amrex_dj * j + amrex_dk * k] =
-                            contig_ptr[contig_di * i + contig_dj * j +
-                                       contig_dk * k];
-                  delete[] contig_ptr;
-                });
-#endif
               }
 
             } // for vi
           } // for local_component
+          }; // read_group
+
+          if (vartype_is_real4(cgroup.vartype))
+            read_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
+          else
+            read_group(as_mfab_real(*groupdata.mfab[tl]));
 
           // Mark read variables as valid
           for (int vi = 0; vi < numvars; ++vi)
@@ -1541,10 +1515,7 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
 
       // Create dataset
 
-      const openPMD::Datatype datatype =
-          openPMD::determineDatatype<CCTK_REAL>();
       const openPMD::Extent extent = to_vector(reversed(idomain.shape()));
-      const openPMD::Dataset dataset(datatype, extent);
 
       const int numgroups = CCTK_NumGroups();
       for (int gi = 0; gi < numgroups; ++gi) {
@@ -1557,16 +1528,7 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
           assert(!ierr);
           if (cgroup.grouptype != CCTK_GF)
             continue;
-          if (vartype_is_real4(cgroup.vartype)) {
-            static std::set<int> warned_groups;
-            if (warned_groups.insert(gi).second)
-              CCTK_VWARN(CCTK_WARN_ALERT,
-                        "openPMD output is not yet supported for CCTK_REAL4 "
-                        "grid function group %s, skipping",
-                        CCTK_FullGroupName(gi));
-            continue;
-          }
-          assert(vartype_is_real8(cgroup.vartype));
+          assert(vartype_is_supported_real(cgroup.vartype));
           assert(cgroup.dim == 3);
           // cGroupDynamicData cgroupdynamicdata;
           // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -1581,7 +1543,16 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
           // const int firstvarindex = groupdata.firstvarindex;
           const int numvars = groupdata.numvars;
           const int tl = 0;
-          const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
+
+          // The body below is generic in the grid function group's storage
+          // precision T (CCTK_REAL for REAL/REAL8 groups, float for REAL4
+          // groups); `mfab` is either an amrex::MultiFab or an
+          // amrex::fMultiFab, matching the group's AnyMultiFab alternative.
+          const auto write_group = [&](const auto &mfab) {
+          using T = typename std::decay_t<decltype(mfab)>::value_type;
+          const openPMD::Datatype datatype = openPMD::determineDatatype<T>();
+          const openPMD::Dataset dataset(datatype, extent);
+
           const amrex::IndexType &indextype = mfab.ixType();
           const Arith::vect<bool, 3> is_cell_centred{indextype.cellCentered(0),
                                                      indextype.cellCentered(1),
@@ -1705,10 +1676,10 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
             for (int d = 0; d < 3; ++d)
               assert(start.at(d) + count.at(d) <= extent.at(d));
 
-            const amrex::FArrayBox &fab = mfab[component];
+            const auto &fab = mfab[component];
             for (int vi = 0; vi < numvars; ++vi) {
               if (output_ghosts || intbox == extbox) {
-                const CCTK_REAL *const ptr = fab.dataPtr() + vi * np;
+                const T *const ptr = fab.dataPtr() + vi * np;
 #if OPENPMDAPI_VERSION_GE(0, 15, 0)
                 record_components.at(vi).storeChunkRaw(ptr, start, count);
 #else
@@ -1716,15 +1687,14 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                                                     start, count);
 #endif
               } else {
-                std::shared_ptr<CCTK_REAL> ptr(
-                    new CCTK_REAL[np], std::default_delete<CCTK_REAL[]>());
+                std::shared_ptr<T> ptr(new T[np], std::default_delete<T[]>());
                 const Arith::vect<int, 3> amrex_shape = extbox.shape();
                 const Arith::vect<int, 3> amrex_offset = box.lo - extbox.lo;
                 constexpr int amrex_di = 1;
                 const int amrex_dj = amrex_di * amrex_shape[0];
                 const int amrex_dk = amrex_dj * amrex_shape[1];
                 const int amrex_np = amrex_dk * amrex_shape[2];
-                const CCTK_REAL *restrict const amrex_ptr =
+                const T *restrict const amrex_ptr =
                     fab.dataPtr() + vi * amrex_np + amrex_di * amrex_offset[0] +
                     amrex_dj * amrex_offset[1] + amrex_dk * amrex_offset[2];
                 const Arith::vect<int, 3> contig_shape = box.shape();
@@ -1733,7 +1703,7 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                 const int contig_dk = contig_dj * contig_shape[1];
                 const int contig_np = contig_dk * contig_shape[2];
                 assert(contig_np == np);
-                CCTK_REAL *restrict const contig_ptr = ptr.get();
+                T *restrict const contig_ptr = ptr.get();
                 for (int k = 0; k < contig_shape[2]; ++k)
                   for (int j = 0; j < contig_shape[1]; ++j)
 #pragma omp simd
@@ -1746,6 +1716,12 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
               }
             } // for vi
           } // for local_component
+          }; // write_group
+
+          if (vartype_is_real4(cgroup.vartype))
+            write_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
+          else
+            write_group(as_mfab_real(*groupdata.mfab[tl]));
         }
       } // for gi
 

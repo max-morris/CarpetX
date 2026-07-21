@@ -44,6 +44,7 @@ static inline int omp_in_parallel() { return 0; }
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace CarpetX {
@@ -130,6 +131,16 @@ struct carpetx_adios2_t {
 
   ////////////////////////////////////////////////////////////////////////////////
 
+  // Access the box/distribution-map structure of a grid function group's
+  // storage without caring whether it is backed by an amrex::MultiFab or an
+  // amrex::fMultiFab (REAL4 groups): these structural properties do not
+  // depend on the storage precision.
+  static const amrex::FabArrayBase &as_fabarraybase(const AnyMultiFab &mfab) {
+    return std::visit(
+        [](const auto &fab) -> const amrex::FabArrayBase & { return fab; },
+        mfab);
+  }
+
   static std::string make_varname(const int gi, const int vi,
                                   const int patch = -1, const int reflevel = -1,
                                   const int component = -1) {
@@ -205,26 +216,11 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
   if (io_verbose)
     CCTK_VINFO("OutputADIOS2...");
 
-  // CCTK_REAL4 grid function groups are not yet supported by ADIOS2 output.
-  // Warn once per group and drop them from the set of groups to be output,
-  // so that CCTK_REAL groups continue to be written normally.
-  std::vector<bool> filtered_output_group = output_group;
-  for (int gi = 0; gi < int(filtered_output_group.size()); ++gi) {
-    if (!filtered_output_group.at(gi))
-      continue;
-    cGroup cgroup;
-    const int ierr = CCTK_GroupData(gi, &cgroup);
-    assert(!ierr);
-    if (cgroup.grouptype == CCTK_GF && vartype_is_real4(cgroup.vartype)) {
-      static std::set<int> warned_groups;
-      if (warned_groups.insert(gi).second)
-        CCTK_VWARN(CCTK_WARN_ALERT,
-                  "ADIOS2 output is not yet supported for CCTK_REAL4 grid "
-                  "function group %s, skipping",
-                  CCTK_FullGroupName(gi));
-      filtered_output_group.at(gi) = false;
-    }
-  }
+  // CCTK_REAL4 and CCTK_REAL8/REAL grid function groups are both supported
+  // by ADIOS2 output; the per-group precision is dispatched where the
+  // group's variables are defined and written (see `define_group` and
+  // `write_group` below).
+  const std::vector<bool> &filtered_output_group = output_group;
 
   try {
 
@@ -303,7 +299,7 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
               ierr = CCTK_GroupData(gi, &cgroup);
               assert(!ierr);
               assert(cgroup.grouptype == CCTK_GF);
-              assert(vartype_is_real8(cgroup.vartype));
+              assert(vartype_is_supported_real(cgroup.vartype));
               assert(cgroup.dim == 3);
               // cGroupDynamicData cgroupdynamicdata;
               // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -316,7 +312,11 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
               const int numvars = groupdata.numvars;
 
               const int tl = 0;
-              const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
+
+              // Generic in the group's storage precision T (CCTK_REAL for
+              // REAL/REAL8 groups, float for REAL4 groups).
+              const auto define_group = [&](const auto &mfab) {
+              using T = typename std::decay_t<decltype(mfab)>::value_type;
               const int num_local_components = mfab.local_size();
 
               // Loop over variables
@@ -334,9 +334,8 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                     if (io_verbose)
                       CCTK_VINFO("      Defining variable %s...",
                                  varname.c_str());
-                    adios2::Variable<CCTK_REAL> var =
-                        io.DefineVariable<CCTK_REAL>(varname, {}, {},
-                                                     {1, 1, 1});
+                    adios2::Variable<T> var =
+                        io.DefineVariable<T>(varname, {}, {}, {1, 1, 1});
 #ifdef ADIOS2_HAVE_BLOSC2
                     var.AddOperation(compressor, compressor_options);
 #endif
@@ -349,12 +348,18 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                   if (io_verbose)
                     CCTK_VINFO("      Defining variable %s...",
                                varname.c_str());
-                  // const adios2::Variable<CCTK_REAL> var =
-                  io.DefineVariable<CCTK_REAL>(varname, {}, {}, {1});
+                  // const adios2::Variable<T> var =
+                  io.DefineVariable<T>(varname, {}, {}, {1});
 
                 } // if combine_components
 
               } // for vi
+              }; // define_group
+
+              if (vartype_is_real4(cgroup.vartype))
+                define_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
+              else
+                define_group(as_mfab_real(*groupdata.mfab[tl]));
             }
           } // for gi
 
@@ -389,7 +394,7 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
             ierr = CCTK_GroupData(gi, &cgroup);
             assert(!ierr);
             assert(cgroup.grouptype == CCTK_GF);
-            assert(vartype_is_real8(cgroup.vartype));
+            assert(vartype_is_supported_real(cgroup.vartype));
             assert(cgroup.dim == 3);
             // cGroupDynamicData cgroupdynamicdata;
             // ierr = CCTK_GroupDynamicData(cctkGH, gi, &cgroupdynamicdata);
@@ -401,10 +406,13 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
             // const int firstvarindex = groupdata.firstvarindex;
             const int numvars = groupdata.numvars;
             const int tl = 0;
-            const amrex::MultiFab &mfab = as_mfab_real(*groupdata.mfab[tl]);
-            const amrex::IndexType &indextype = mfab.ixType();
-            // const amrex::IntVect &ngrow = mfab.nGrowVect();
-            // const amrex::DistributionMapping &dm = mfab.DistributionMap();
+            // Structural properties (box layout, centering) do not depend on
+            // the group's storage precision.
+            const amrex::FabArrayBase &mfab_base =
+                as_fabarraybase(*groupdata.mfab[tl]);
+            const amrex::IndexType &indextype = mfab_base.ixType();
+            // const amrex::IntVect &ngrow = mfab_base.nGrowVect();
+            // const amrex::DistributionMapping &dm = mfab_base.DistributionMap();
 
             const amrex::Geometry &geom =
                 patchdata.amrcore->Geom(leveldata.level);
@@ -421,12 +429,13 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                 indextype.cellCentered(0), indextype.cellCentered(1),
                 indextype.cellCentered(2)};
 
-            const int num_local_components = mfab.local_size();
+            const int num_local_components = mfab_base.local_size();
             std::vector<box_t<int, 3> > grids(num_local_components);
             for (int local_component = 0;
                  local_component < num_local_components; ++local_component) {
-              const int component = mfab.IndexArray().at(local_component);
-              const amrex::Box &fabbox = mfab.fabbox(component); // exterior
+              const int component = mfab_base.IndexArray().at(local_component);
+              const amrex::Box &fabbox =
+                  mfab_base.fabbox(component); // exterior
               grids.at(local_component) = box_t<int, 3>{
                   .lo = {fabbox.smallEnd(0), fabbox.smallEnd(1),
                          fabbox.smallEnd(2)},
@@ -444,6 +453,12 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
             const std::vector<int> &offsets = offsets_sizes[0];
             const std::vector<int> &sizes = offsets_sizes[1];
 
+            // The actual data transfer is generic in the group's storage
+            // precision T (CCTK_REAL for REAL/REAL8 groups, float for REAL4
+            // groups).
+            const auto write_group = [&](const auto &mfab) {
+            using T = typename std::decay_t<decltype(mfab)>::value_type;
+
             // Loop over variables
             for (int vi = 0; vi < numvars; ++vi) {
               if (!combine_components) {
@@ -458,17 +473,16 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                   for (int d = 0; d < 3; ++d)
                     lsh.at(d) = level.grids.at(local_component).shape()[d];
                   const int np = level.grids.at(local_component).size();
-                  const amrex::FArrayBox &fab = mfab[component];
+                  const auto &fab = mfab[component];
 
                   const std::string varname = make_varname(
                       gi, vi, patchdata.patch, leveldata.level, component);
                   if (io_verbose)
                     CCTK_VINFO("      Writing variable %s...", varname.c_str());
-                  adios2::Variable<CCTK_REAL> var =
-                      io.InquireVariable<CCTK_REAL>(varname);
+                  adios2::Variable<T> var = io.InquireVariable<T>(varname);
                   assert(var);
                   var.SetSelection({{}, lsh});
-                  const CCTK_REAL *const ptr = fab.dataPtr() + vi * np;
+                  const T *const ptr = fab.dataPtr() + vi * np;
                   assert(ptr);
                   engine.Put(var, ptr);
                 } // for local_component
@@ -481,13 +495,12 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                   CCTK_VINFO("      Writing variable %s...", varname.c_str());
 
                 const size_t total_np = offsets.back();
-                adios2::Variable<CCTK_REAL> var =
-                    io.InquireVariable<CCTK_REAL>(varname);
+                adios2::Variable<T> var = io.InquireVariable<T>(varname);
                 var.SetSelection({{}, {total_np}});
 
                 if (!combine_via_span) {
 
-                  std::vector<CCTK_REAL> alldata(offsets.back());
+                  std::vector<T> alldata(offsets.back());
 
                   // Loop over components (AMReX boxes)
                   for (int local_component = 0;
@@ -496,12 +509,12 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                     const int component = mfab.IndexArray().at(local_component);
 
                     const size_t np = sizes.at(local_component);
-                    const amrex::FArrayBox &fab = mfab[component];
-                    const CCTK_REAL *const ptr = fab.dataPtr() + vi * np;
+                    const auto &fab = mfab[component];
+                    const T *const ptr = fab.dataPtr() + vi * np;
                     assert(ptr);
 
                     std::memcpy(alldata.data() + offsets.at(local_component),
-                                ptr, sizeof(CCTK_REAL) * np);
+                                ptr, sizeof(T) * np);
 
                   } // for local_component
 
@@ -509,7 +522,7 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
 
                 } else { // if combine_via_span
 
-                  const adios2::Variable<CCTK_REAL>::Span span =
+                  const typename adios2::Variable<T>::Span span =
                       engine.Put(var);
 
                   for (int local_component = 0;
@@ -517,12 +530,12 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                        ++local_component) {
                     const int component = mfab.IndexArray().at(local_component);
                     const size_t np = sizes.at(local_component);
-                    const amrex::FArrayBox &fab = mfab[component];
-                    const CCTK_REAL *const ptr = fab.dataPtr() + vi * np;
+                    const auto &fab = mfab[component];
+                    const T *const ptr = fab.dataPtr() + vi * np;
                     assert(ptr);
 
                     std::memcpy(span.data() + offsets.at(local_component), ptr,
-                                sizeof(CCTK_REAL) * np);
+                                sizeof(T) * np);
                   } // for local_component
 
                 } // if combine_via_span
@@ -530,6 +543,12 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
               } // if combine_components
 
             } // for vi
+            }; // write_group
+
+            if (vartype_is_real4(cgroup.vartype))
+              write_group(std::get<amrex::fMultiFab>(*groupdata.mfab[tl]));
+            else
+              write_group(as_mfab_real(*groupdata.mfab[tl]));
           }
         } // for gi
 
