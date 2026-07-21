@@ -1723,9 +1723,6 @@ operator<<(std::ostream &os,
            const GHExt::GlobalData::AnyTypeVector::AnyTypeScalarRef &scalar) {
   const char sep = '\t';
   switch (scalar._vect.type()) {
-  case CCTK_VARIABLE_REAL:
-    os << *(CCTK_REAL *)scalar._vect.data_at(scalar._idx);
-    break;
   case CCTK_VARIABLE_INT:
     os << *(CCTK_INT *)scalar._vect.data_at(scalar._idx);
     break;
@@ -1733,8 +1730,20 @@ operator<<(std::ostream &os,
     CCTK_COMPLEX value = *(CCTK_COMPLEX *)scalar._vect.data_at(scalar._idx);
     os << value.real() << sep << value.imag();
   } break;
+  case CCTK_VARIABLE_REAL4:
+    os << *(CCTK_REAL4 *)scalar._vect.data_at(scalar._idx);
+    break;
+#ifdef HAVE_CCTK_REAL2
+  case CCTK_VARIABLE_REAL2:
+    // No native ostream operator<< for _Float16; promote to float
+    // (exact and lossless) for printing.
+    os << float(*(CCTK_REAL2 *)scalar._vect.data_at(scalar._idx));
+    break;
+#endif
   default:
-    assert(0 && "Unexpected variable type");
+    assert(vartype_is_real8(scalar._vect.type()) &&
+          "Unexpected variable type");
+    os << *(CCTK_REAL *)scalar._vect.data_at(scalar._idx);
     break;
   }
   return os;
@@ -1776,15 +1785,28 @@ operator<<(YAML::Emitter &yaml,
     yaml << *(const CCTK_COMPLEX *)anytypescalarref._vect.data_at(
         anytypescalarref._idx);
     break;
-  case CCTK_VARIABLE_REAL:
-    yaml << *(const CCTK_REAL *)anytypescalarref._vect.data_at(
-        anytypescalarref._idx);
-    break;
   case CCTK_VARIABLE_INT:
     yaml << *(const CCTK_INT *)anytypescalarref._vect.data_at(
         anytypescalarref._idx);
     break;
+  case CCTK_VARIABLE_REAL4:
+    yaml << *(const CCTK_REAL4 *)anytypescalarref._vect.data_at(
+        anytypescalarref._idx);
+    break;
+#ifdef HAVE_CCTK_REAL2
+  case CCTK_VARIABLE_REAL2:
+    // yaml-cpp has no native emitter for _Float16; promote to float
+    // (exact and lossless).
+    yaml << float(*(const CCTK_REAL2 *)anytypescalarref._vect.data_at(
+        anytypescalarref._idx));
+    break;
+#endif
   default:
+    if (vartype_is_real8(anytypescalarref._vect.type())) {
+      yaml << *(const CCTK_REAL *)anytypescalarref._vect.data_at(
+          anytypescalarref._idx);
+      break;
+    }
     // missed to implement a type
     CCTK_VERROR("Cannot handle type %d", anytypescalarref._vect.type());
     break;

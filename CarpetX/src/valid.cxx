@@ -266,8 +266,8 @@ void poison_invalid_ga(const int gi, const int vi, const int tl) {
       n_elems *= gsh[i];
     // TODO: use AnyScalarTypeRef for this?
     assert(group.vartype == CCTK_VARIABLE_COMPLEX ||
-           group.vartype == CCTK_VARIABLE_REAL ||
-           group.vartype == CCTK_VARIABLE_INT);
+           group.vartype == CCTK_VARIABLE_INT ||
+           vartype_is_supported_real(group.vartype));
     switch (group.vartype) {
     case CCTK_VARIABLE_COMPLEX: {
       CCTK_COMPLEX *restrict ptr = static_cast<CCTK_COMPLEX *>(
@@ -275,16 +275,32 @@ void poison_invalid_ga(const int gi, const int vi, const int tl) {
       const poison_value_t<CCTK_COMPLEX> poison_value;
       poison_value.set_to_poison(ptr, n_elems);
     } break;
-    case CCTK_VARIABLE_REAL: {
-      CCTK_REAL *restrict ptr = static_cast<CCTK_REAL *>(
-          arraygroupdata.data.at(tl).data_at(vi * n_elems));
-      const poison_value_t<CCTK_REAL> poison_value;
-      poison_value.set_to_poison(ptr, n_elems);
-    } break;
     case CCTK_VARIABLE_INT: {
       CCTK_INT *restrict ptr = static_cast<CCTK_INT *>(
           arraygroupdata.data.at(tl).data_at(vi * n_elems));
       const poison_value_t<CCTK_INT> poison_value;
+      poison_value.set_to_poison(ptr, n_elems);
+    } break;
+    case CCTK_VARIABLE_REAL4: {
+      CCTK_REAL4 *restrict ptr = static_cast<CCTK_REAL4 *>(
+          arraygroupdata.data.at(tl).data_at(vi * n_elems));
+      const poison_value_t<CCTK_REAL4> poison_value;
+      poison_value.set_to_poison(ptr, n_elems);
+    } break;
+#ifdef HAVE_CCTK_REAL2
+    case CCTK_VARIABLE_REAL2: {
+      CCTK_REAL2 *restrict ptr = static_cast<CCTK_REAL2 *>(
+          arraygroupdata.data.at(tl).data_at(vi * n_elems));
+      const poison_value_t<CCTK_REAL2> poison_value;
+      poison_value.set_to_poison(ptr, n_elems);
+    } break;
+#endif
+    default: {
+      // Includes CCTK_VARIABLE_REAL / CCTK_VARIABLE_REAL8 (same storage)
+      assert(vartype_is_real8(group.vartype));
+      CCTK_REAL *restrict ptr = static_cast<CCTK_REAL *>(
+          arraygroupdata.data.at(tl).data_at(vi * n_elems));
+      const poison_value_t<CCTK_REAL> poison_value;
       poison_value.set_to_poison(ptr, n_elems);
     } break;
     }
@@ -586,10 +602,20 @@ void check_valid_ga(const int gi, const int vi, const int tl,
         ++nan_count;
     }
   } break;
-  case CCTK_VARIABLE_REAL: {
-    const poison_value_t<CCTK_REAL> poison_value;
-    const CCTK_REAL *restrict const ptr = static_cast<const CCTK_REAL *const>(
+  case CCTK_VARIABLE_INT: {
+    const poison_value_t<CCTK_INT> poison_value;
+    const CCTK_INT *restrict const ptr = static_cast<const CCTK_INT *const>(
         arraygroupdata.data.at(tl).data_at(vi * n_elems));
+    for (int i = 0; i < n_elems; i++) {
+      if (CCTK_BUILTIN_EXPECT(poison_value.is_poison(ptr[i]), false))
+        ++nan_count;
+    }
+  } break;
+  case CCTK_VARIABLE_REAL4: {
+    const poison_value_t<CCTK_REAL4> poison_value;
+    const CCTK_REAL4 *restrict const ptr =
+        static_cast<const CCTK_REAL4 *const>(
+            arraygroupdata.data.at(tl).data_at(vi * n_elems));
     for (int i = 0; i < n_elems; i++) {
       if (CCTK_BUILTIN_EXPECT(
               poison_value.is_poison(ptr[i]) ||
@@ -598,12 +624,36 @@ void check_valid_ga(const int gi, const int vi, const int tl,
         ++nan_count;
     }
   } break;
-  case CCTK_VARIABLE_INT: {
-    const poison_value_t<CCTK_INT> poison_value;
-    const CCTK_INT *restrict const ptr = static_cast<const CCTK_INT *const>(
+#ifdef HAVE_CCTK_REAL2
+  case CCTK_VARIABLE_REAL2: {
+    const poison_value_t<CCTK_REAL2> poison_value;
+    const CCTK_REAL2 *restrict const ptr =
+        static_cast<const CCTK_REAL2 *const>(
+            arraygroupdata.data.at(tl).data_at(vi * n_elems));
+    for (int i = 0; i < n_elems; i++) {
+      // std::isnan has overloads for float/double/long double only;
+      // calling it with a bare CCTK_REAL2 (_Float16) is ambiguous. Promote
+      // to float instead (exact and lossless).
+      if (CCTK_BUILTIN_EXPECT(
+              poison_value.is_poison(ptr[i]) ||
+                  (nan_handling != nan_handling_t::allow_nans &&
+                   isnan(float(ptr[i]))),
+              false))
+        ++nan_count;
+    }
+  } break;
+#endif
+  default: {
+    // Includes CCTK_VARIABLE_REAL / CCTK_VARIABLE_REAL8 (same storage)
+    assert(vartype_is_real8(group.vartype));
+    const poison_value_t<CCTK_REAL> poison_value;
+    const CCTK_REAL *restrict const ptr = static_cast<const CCTK_REAL *const>(
         arraygroupdata.data.at(tl).data_at(vi * n_elems));
     for (int i = 0; i < n_elems; i++) {
-      if (CCTK_BUILTIN_EXPECT(poison_value.is_poison(ptr[i]), false))
+      if (CCTK_BUILTIN_EXPECT(
+              poison_value.is_poison(ptr[i]) ||
+                  (nan_handling != nan_handling_t::allow_nans && isnan(ptr[i])),
+              false))
         ++nan_count;
     }
   } break;

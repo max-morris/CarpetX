@@ -293,8 +293,9 @@ struct GHExt {
       };
 
       void alloc(int type_, size_t count_) {
-        assert(type_ == CCTK_VARIABLE_INT || type_ == CCTK_VARIABLE_REAL ||
-               type_ == CCTK_VARIABLE_COMPLEX);
+        assert(type_ == CCTK_VARIABLE_INT ||
+               type_ == CCTK_VARIABLE_COMPLEX ||
+               vartype_is_supported_real(type_));
 
         assert(_type == -1);
         assert(_typesize == -1);

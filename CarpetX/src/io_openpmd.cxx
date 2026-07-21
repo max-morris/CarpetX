@@ -1236,10 +1236,6 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
   loadChunk(openPMD::shareRaw(ptr), start, count)
 #endif
             switch (cgroup.vartype) {
-            case CCTK_VARIABLE_REAL:
-              record_components.at(vi).loadChunkRaw(
-                  static_cast<CCTK_REAL *>(cactus_var_ptr), start, count);
-              break;
             case CCTK_VARIABLE_INT:
               record_components.at(vi).loadChunkRaw(
                   static_cast<CCTK_INT *>(cactus_var_ptr), start, count);
@@ -1248,8 +1244,45 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
               record_components.at(vi).loadChunkRaw(
                   static_cast<CCTK_COMPLEX *>(cactus_var_ptr), start, count);
               break;
+            case CCTK_VARIABLE_REAL4:
+              record_components.at(vi).loadChunkRaw(
+                  static_cast<CCTK_REAL4 *>(cactus_var_ptr), start, count);
+              break;
+#ifdef HAVE_CCTK_REAL2
+            case CCTK_VARIABLE_REAL2:
+              // Grid scalar/array I/O is always single-rank (unlike the
+              // grid function path above), so, unlike CCTK_REAL2 grid
+              // functions, there is no need for the float32 "carrier"
+              // workaround for a checkpoint's raw 16-bit USHORT record
+              // (see io_real2.hxx): read the raw bits directly into the
+              // group's own CCTK_REAL2 storage -- bit-exact and zero-copy.
+              // A regular (non-checkpoint, viz) file instead holds widened
+              // float32 data (mirroring OutputOpenPMD below), so read it
+              // into a temporary float buffer and narrow it back down to
+              // CCTK_REAL2 once the deferred read actually runs (queued as
+              // a `tasks` entry, run after series->flush() below -- the
+              // same pattern the CCTK_REAL2 grid function path above uses).
+              if (is_checkpoint) {
+                record_components.at(vi).loadChunkRaw(
+                    reinterpret_cast<unsigned short *>(cactus_var_ptr), start,
+                    count);
+              } else {
+                auto floatbuf = std::shared_ptr<float[]>(new float[np]);
+                record_components.at(vi).loadChunk(floatbuf, start, count);
+                CCTK_REAL2 *const dst_ptr =
+                    static_cast<CCTK_REAL2 *>(cactus_var_ptr);
+                tasks.emplace_back([floatbuf, dst_ptr, np]() {
+                  narrow_float_flat_to_real2(floatbuf.get(), dst_ptr, np);
+                });
+              }
+              break;
+#endif
             default:
-              assert(0 && "Unexpected variable type");
+              assert(vartype_is_real8(cgroup.vartype) &&
+                    "Unexpected variable type");
+              record_components.at(vi).loadChunkRaw(
+                  static_cast<CCTK_REAL *>(cactus_var_ptr), start, count);
+              break;
             }
           } else {
             auto cactus_ptr = &groupdata.data.at(tl);
@@ -1281,20 +1314,31 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                     size_t(CCTK_VarTypeSize(cgroup.vartype));
                 // TODO: Use AnyTypeScalarRef for this?
                 std::vector<char> poison(typesize);
-                assert(cgroup.vartype == CCTK_VARIABLE_REAL ||
-                       cgroup.vartype == CCTK_VARIABLE_INT ||
-                       cgroup.vartype == CCTK_VARIABLE_COMPLEX);
+                assert(cgroup.vartype == CCTK_VARIABLE_INT ||
+                       cgroup.vartype == CCTK_VARIABLE_COMPLEX ||
+                       vartype_is_supported_real(cgroup.vartype));
                 switch (cgroup.vartype) {
-                case CCTK_VARIABLE_REAL: {
-                  poison_value_t<CCTK_REAL> poison_value;
-                  poison_value.set_to_poison(poison.data(), 1);
-                } break;
                 case CCTK_VARIABLE_INT: {
                   poison_value_t<CCTK_INT> poison_value;
                   poison_value.set_to_poison(poison.data(), 1);
                 } break;
                 case CCTK_VARIABLE_COMPLEX: {
                   poison_value_t<CCTK_COMPLEX> poison_value;
+                  poison_value.set_to_poison(poison.data(), 1);
+                } break;
+                case CCTK_VARIABLE_REAL4: {
+                  poison_value_t<CCTK_REAL4> poison_value;
+                  poison_value.set_to_poison(poison.data(), 1);
+                } break;
+#ifdef HAVE_CCTK_REAL2
+                case CCTK_VARIABLE_REAL2: {
+                  poison_value_t<CCTK_REAL2> poison_value;
+                  poison_value.set_to_poison(poison.data(), 1);
+                } break;
+#endif
+                default: {
+                  assert(vartype_is_real8(cgroup.vartype));
+                  poison_value_t<CCTK_REAL> poison_value;
                   poison_value.set_to_poison(poison.data(), 1);
                 } break;
                 }
@@ -1312,20 +1356,10 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                 }
               }
             };
-            assert(cgroup.vartype == CCTK_VARIABLE_REAL ||
-                   cgroup.vartype == CCTK_VARIABLE_INT ||
-                   cgroup.vartype == CCTK_VARIABLE_COMPLEX);
+            assert(cgroup.vartype == CCTK_VARIABLE_INT ||
+                   cgroup.vartype == CCTK_VARIABLE_COMPLEX ||
+                   vartype_is_supported_real(cgroup.vartype));
             switch (cgroup.vartype) {
-            case CCTK_VARIABLE_REAL:
-              record_components.at(vi).loadChunk(
-                  std::shared_ptr<CCTK_REAL>(
-                      static_cast<CCTK_REAL *>(
-                          cactus_ptr->data_at(contig_offset + cactus_np * vi)),
-                      [=](CCTK_REAL *const ptr) {
-                        expand_box(static_cast<void *>(ptr));
-                      }),
-                  start, count);
-              break;
             case CCTK_VARIABLE_INT:
               record_components.at(vi).loadChunk(
                   std::shared_ptr<CCTK_INT>(
@@ -1342,6 +1376,55 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                       static_cast<CCTK_COMPLEX *>(
                           cactus_ptr->data_at(contig_offset + cactus_np * vi)),
                       [=](CCTK_COMPLEX *const ptr) {
+                        expand_box(static_cast<void *>(ptr));
+                      }),
+                  start, count);
+              break;
+            case CCTK_VARIABLE_REAL4:
+              record_components.at(vi).loadChunk(
+                  std::shared_ptr<CCTK_REAL4>(
+                      static_cast<CCTK_REAL4 *>(
+                          cactus_ptr->data_at(contig_offset + cactus_np * vi)),
+                      [=](CCTK_REAL4 *const ptr) {
+                        expand_box(static_cast<void *>(ptr));
+                      }),
+                  start, count);
+              break;
+#ifdef HAVE_CCTK_REAL2
+            case CCTK_VARIABLE_REAL2:
+              // Grid scalars/arrays never have ghost zones (nghostzones is
+              // always 0, see SetupGlobals in driver.cxx), so intbox ==
+              // extbox unconditionally and this whole branch is
+              // unreachable for CCTK_ARRAY/CCTK_SCALAR groups (confirmed
+              // by the assert(!input_ghosts) above). Only the checkpoint
+              // (bit-exact raw 16-bit) case is implemented here, since its
+              // source and destination element sizes match, so it fits the
+              // existing generic (vartypesize-based) expand_box unchanged.
+              // The viz (float32-widened) case would need a
+              // differently-sized source buffer than the CCTK_REAL2-sized
+              // destination, which expand_box's memcpy cannot bridge; it
+              // is intentionally left unimplemented, as it can never run.
+              assert(is_checkpoint &&
+                    "REAL2 grid scalar/array viz (non-checkpoint) ghosted "
+                    "read is unreachable: arrays/scalars have no ghost "
+                    "zones");
+              record_components.at(vi).loadChunk(
+                  std::shared_ptr<unsigned short>(
+                      static_cast<unsigned short *>(
+                          cactus_ptr->data_at(contig_offset + cactus_np * vi)),
+                      [=](unsigned short *const ptr) {
+                        expand_box(static_cast<void *>(ptr));
+                      }),
+                  start, count);
+              break;
+#endif
+            default:
+              assert(vartype_is_real8(cgroup.vartype));
+              record_components.at(vi).loadChunk(
+                  std::shared_ptr<CCTK_REAL>(
+                      static_cast<CCTK_REAL *>(
+                          cactus_ptr->data_at(contig_offset + cactus_np * vi)),
+                      [=](CCTK_REAL *const ptr) {
                         expand_box(static_cast<void *>(ptr));
                       }),
                   start, count);
@@ -1861,16 +1944,25 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
 
         // Create dataset
 
-        const openPMD::Datatype datatype = [](int varType) {
+        const openPMD::Datatype datatype = [is_checkpoint](int varType) {
           switch (varType) {
-          case CCTK_VARIABLE_REAL:
-            return openPMD::determineDatatype<CCTK_REAL>();
           case CCTK_VARIABLE_INT:
             return openPMD::determineDatatype<CCTK_INT>();
           case CCTK_VARIABLE_COMPLEX:
             return openPMD::determineDatatype<CCTK_COMPLEX>();
+          case CCTK_VARIABLE_REAL4:
+            return openPMD::determineDatatype<CCTK_REAL4>();
+#ifdef HAVE_CCTK_REAL2
+          case CCTK_VARIABLE_REAL2:
+            // Checkpoints store CCTK_REAL2's raw 16-bit payload bit-exactly
+            // (D6); a regular (viz) file instead widens to float32, since
+            // openPMD has no native fp16 dtype (see io_real2.hxx).
+            return is_checkpoint ? openPMD::determineDatatype<unsigned short>()
+                                 : openPMD::determineDatatype<float>();
+#endif
           default:
-            assert(0 && "Unexpected varType");
+            assert(vartype_is_real8(varType) && "Unexpected varType");
+            return openPMD::determineDatatype<CCTK_REAL>();
           }
         }(cgroup.vartype);
         const openPMD::Extent extent = to_vector(reversed(idomain.shape()));
@@ -1965,10 +2057,6 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
   storeChunk(openPMD::shareRaw(ptr), start, count)
 #endif
             switch (cgroup.vartype) {
-            case CCTK_VARIABLE_REAL:
-              record_components.at(vi).storeChunkRaw(
-                  static_cast<CCTK_REAL const *>(var_ptr), start, count);
-              break;
             case CCTK_VARIABLE_INT:
               record_components.at(vi).storeChunkRaw(
                   static_cast<CCTK_INT const *>(var_ptr), start, count);
@@ -1977,8 +2065,40 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
               record_components.at(vi).storeChunkRaw(
                   static_cast<CCTK_COMPLEX const *>(var_ptr), start, count);
               break;
+            case CCTK_VARIABLE_REAL4:
+              record_components.at(vi).storeChunkRaw(
+                  static_cast<CCTK_REAL4 const *>(var_ptr), start, count);
+              break;
+#ifdef HAVE_CCTK_REAL2
+            case CCTK_VARIABLE_REAL2:
+              // See the matching read-side comment above: grid
+              // scalar/array I/O is always single-rank, so a checkpoint's
+              // raw 16-bit payload can be written directly and bit-exactly
+              // (no float32 "carrier" workaround needed, unlike the grid
+              // function path). A regular (viz) file instead widens to
+              // float32 (mirroring the datatype lambda above), via a
+              // temporary buffer kept alive (through the deferred write,
+              // past series->flush() below) by the shared_ptr storeChunk
+              // overload's own internal reference, exactly like the dead
+              // (but instructive) AnyTypeVector-buffer branch below.
+              if (is_checkpoint) {
+                record_components.at(vi).storeChunkRaw(
+                    reinterpret_cast<unsigned short const *>(var_ptr), start,
+                    count);
+              } else {
+                auto floatbuf = std::shared_ptr<float[]>(new float[np]);
+                widen_real2_flat_to_float(static_cast<const CCTK_REAL2 *>(var_ptr),
+                                          floatbuf.get(), np);
+                record_components.at(vi).storeChunk(floatbuf, start, count);
+              }
+              break;
+#endif
             default:
-              assert(0 && "Unexpected variable type");
+              assert(vartype_is_real8(cgroup.vartype) &&
+                    "Unexpected variable type");
+              record_components.at(vi).storeChunkRaw(
+                  static_cast<CCTK_REAL const *>(var_ptr), start, count);
+              break;
             }
           } else {
             auto cactus_ptr = &groupdata.data.at(tl);
@@ -2000,13 +2120,6 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                                              cactus_dk * k + vi * cactus_np),
                          CCTK_VarTypeSize(cgroup.vartype));
             switch (cgroup.vartype) {
-            case CCTK_VARIABLE_REAL:
-              record_components.at(vi).storeChunk(
-                  std::shared_ptr<CCTK_REAL>(
-                      static_cast<CCTK_REAL *>(contig_ptr->data_at(0)),
-                      [=](CCTK_REAL *) { delete contig_ptr; }),
-                  start, count);
-              break;
             case CCTK_VARIABLE_INT:
               record_components.at(vi).storeChunk(
                   std::shared_ptr<CCTK_INT>(
@@ -2021,8 +2134,40 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                       [=](CCTK_COMPLEX *const) { delete contig_ptr; }),
                   start, count);
               break;
+            case CCTK_VARIABLE_REAL4:
+              record_components.at(vi).storeChunk(
+                  std::shared_ptr<CCTK_REAL4>(
+                      static_cast<CCTK_REAL4 *>(contig_ptr->data_at(0)),
+                      [=](CCTK_REAL4 *) { delete contig_ptr; }),
+                  start, count);
+              break;
+#ifdef HAVE_CCTK_REAL2
+            case CCTK_VARIABLE_REAL2:
+              // See the matching comment on the ghosted read-side branch
+              // above: this whole branch is unreachable for
+              // CCTK_ARRAY/CCTK_SCALAR groups (they have no ghost zones),
+              // so only the checkpoint (bit-exact) case, whose source and
+              // destination element sizes match, is implemented.
+              assert(is_checkpoint &&
+                    "REAL2 grid scalar/array viz (non-checkpoint) ghosted "
+                    "write is unreachable: arrays/scalars have no ghost "
+                    "zones");
+              record_components.at(vi).storeChunk(
+                  std::shared_ptr<unsigned short>(
+                      static_cast<unsigned short *>(contig_ptr->data_at(0)),
+                      [=](unsigned short *) { delete contig_ptr; }),
+                  start, count);
+              break;
+#endif
             default:
-              assert(0 && "Unexpected variable type");
+              assert(vartype_is_real8(cgroup.vartype) &&
+                    "Unexpected variable type");
+              record_components.at(vi).storeChunk(
+                  std::shared_ptr<CCTK_REAL>(
+                      static_cast<CCTK_REAL *>(contig_ptr->data_at(0)),
+                      [=](CCTK_REAL *) { delete contig_ptr; }),
+                  start, count);
+              break;
             }
           }
         } // for vi

@@ -76,6 +76,15 @@ static fileinfo_t get_fileinfo() {
   return fileinfo;
 }
 
+// Whether a grid scalar/array vartype's header/column formatting is a
+// single value per point (REAL, REAL4, REAL2, INT) rather than a pair
+// (COMPLEX). Used by WriteTSVScalars/WriteTSVArrays below, which -- unlike
+// WriteTSVGFs' std::visit-based body -- format each vartype by an explicit
+// switch/if-chain over cgroup.vartype.
+static bool vartype_is_single_column(const int vartype) {
+  return vartype == CCTK_VARIABLE_INT || vartype_is_supported_real(vartype);
+}
+
 // How to output the headers
 enum out_header_t { header_none, header_comment, header_plain };
 static out_header_t get_out_header() {
@@ -291,8 +300,7 @@ void WriteTSVScalars(const cGH *restrict cctkGH, const std::string &filename,
         file << "# 1:iteration" << sep << "2:time";
         int col = 3;
         for (const auto &varname : varnames)
-          if (cgroup.vartype == CCTK_VARIABLE_REAL ||
-              cgroup.vartype == CCTK_VARIABLE_INT) {
+          if (vartype_is_single_column(cgroup.vartype)) {
             file << sep << col++ << ":" << varname;
           } else if (cgroup.vartype == CCTK_VARIABLE_COMPLEX) {
             file << sep << col++ << ":" << varname << ".real";
@@ -310,8 +318,7 @@ void WriteTSVScalars(const cGH *restrict cctkGH, const std::string &filename,
       if (out_fileinfo & fileinfo_axis_labels) {
         file << "iteration" << sep << "time";
         for (const auto &varname : varnames)
-          if (cgroup.vartype == CCTK_VARIABLE_REAL ||
-              cgroup.vartype == CCTK_VARIABLE_INT) {
+          if (vartype_is_single_column(cgroup.vartype)) {
             file << sep << varname;
           } else if (cgroup.vartype == CCTK_VARIABLE_COMPLEX) {
             file << sep << varname << "_real";
@@ -395,8 +402,7 @@ void WriteTSVArrays(const cGH *restrict cctkGH, const std::string &filename,
           file << sep << col++ << ":"
                << "ijk"[dir];
         for (const auto &varname : varnames)
-          if (cgroup.vartype == CCTK_VARIABLE_REAL ||
-              cgroup.vartype == CCTK_VARIABLE_INT) {
+          if (vartype_is_single_column(cgroup.vartype)) {
             file << sep << col++ << ":" << varname;
           } else if (cgroup.vartype == CCTK_VARIABLE_COMPLEX) {
             file << sep << col++ << ":" << varname << ".real";
@@ -417,8 +423,7 @@ void WriteTSVArrays(const cGH *restrict cctkGH, const std::string &filename,
         for (int dir = 0; dir < arraygroupdata.dimension; ++dir)
           file << sep << "ijk"[dir];
         for (const auto &varname : varnames)
-          if (cgroup.vartype == CCTK_VARIABLE_REAL ||
-              cgroup.vartype == CCTK_VARIABLE_INT) {
+          if (vartype_is_single_column(cgroup.vartype)) {
             file << sep << varname;
           } else if (cgroup.vartype == CCTK_VARIABLE_COMPLEX) {
             file << sep << varname << "_real";

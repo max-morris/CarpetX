@@ -188,6 +188,26 @@ inline rawMultiFab narrow_carrier_to_raw16(const amrex::fMultiFab &src) {
   return dst;
 }
 
+// Flat-buffer analogues of widen_real2_to_float/narrow_float_to_real2 above,
+// for grid scalar/array storage (GHExt::GlobalData::AnyTypeVector), which is
+// a raw contiguous buffer of `n` elements rather than an amrex::FabArray.
+// Used by the openPMD array/scalar path for CCTK_REAL2 groups' viz output
+// (checkpoints instead reinterpret the buffer's raw bits directly as
+// `unsigned short`, with no separate widen/narrow step, since that path is
+// always single-rank -- see the comment in io_openpmd.cxx).
+inline void widen_real2_flat_to_float(const CCTK_REAL2 *const src,
+                                      float *const dst,
+                                      const std::ptrdiff_t n) {
+  for (std::ptrdiff_t i = 0; i < n; ++i)
+    dst[i] = float(src[i]);
+}
+inline void narrow_float_flat_to_real2(const float *const src,
+                                       CCTK_REAL2 *const dst,
+                                       const std::ptrdiff_t n) {
+  for (std::ptrdiff_t i = 0; i < n; ++i)
+    dst[i] = CCTK_REAL2(src[i]);
+}
+
 } // namespace CarpetX
 
 #endif // #ifdef HAVE_CCTK_REAL2
