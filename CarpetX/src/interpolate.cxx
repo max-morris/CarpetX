@@ -274,8 +274,11 @@ template <typename T, int order, int centering> struct interpolator {
 
 #pragma omp parallel for simd
     for (int n = 0; n < np; ++n) {
-      const vect<T, dim> x{particles[n].rdata(0), particles[n].rdata(1),
-                           particles[n].rdata(2)};
+      // Particle positions are always stored in CCTK_REAL (AMReX's
+      // ParticleReal); narrow explicitly to T here (a no-op for
+      // T=CCTK_REAL, double->float narrowing for T=CCTK_REAL4 groups).
+      const vect<T, dim> x{T(particles[n].rdata(0)), T(particles[n].rdata(1)),
+                           T(particles[n].rdata(2))};
       // // Ensure the point is inside the domain
       // assert(all(x >= x0_allowed && x <= x1_allowed));
 
@@ -328,6 +331,130 @@ template <typename T, int order, int centering> struct interpolator {
     }
   }
 };
+
+// Dispatch centering/order and run the interpolator for one variable, whose
+// storage precision is T (CCTK_REAL for amrex::MultiFab-backed groups,
+// CCTK_REAL4 for amrex::fMultiFab-backed groups; see driver.hxx's
+// AnyMultiFab). The interpolated values are always handed back as CCTK_REAL,
+// converting float->double at store for T=CCTK_REAL4, since interpolation
+// results are collected and returned to the flesh in double precision
+// regardless of the source group's storage precision.
+template <typename T, typename Particles>
+void interpolate_group(
+    const int centering, const CCTK_INT interpolation_order,
+    const GridDescBase &grid, CCTK_ATTRIBUTE_UNUSED const int gi, const int vi,
+    const int patch, const int level, const amrex::Array4<const T> &vars,
+    const vect<int, dim> &derivs,
+    const vect<vect<bool, dim>, 2> &patch_allowed_boundaries,
+    const Particles &particles, std::vector<CCTK_REAL> &varresult) {
+  const int np = int(varresult.size());
+  std::vector<T> result(np);
+
+  switch (centering) {
+  case 0b000: {
+    // Vertex centering
+
+    switch (interpolation_order) {
+    case 0: {
+      const interpolator<T, 0, 0b000> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 1: {
+      const interpolator<T, 1, 0b000> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 2: {
+      const interpolator<T, 2, 0b000> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 3: {
+      const interpolator<T, 3, 0b000> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 4: {
+      const interpolator<T, 4, 0b000> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    default:
+      CCTK_VERROR("Interpolation order %d for centering [%d,%d,%d] not "
+                  "yet supported",
+                  int(interpolation_order), (centering >> 2) & 1,
+                  (centering >> 1) & 1, centering & 1);
+    } // switch interpolation_order
+    break;
+  } // case 0b000
+
+  case 0b111: {
+    // Cell centering
+
+    switch (interpolation_order) {
+    case 0: {
+      const interpolator<T, 0, 0b111> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 1: {
+      const interpolator<T, 1, 0b111> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 2: {
+      const interpolator<T, 2, 0b111> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 3: {
+      const interpolator<T, 3, 0b111> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    case 4: {
+      const interpolator<T, 4, 0b111> interp{
+          grid,  gi,   vi,     patch,
+          level, vars, derivs, patch_allowed_boundaries};
+      interp.interpolate3d(particles, result);
+      break;
+    }
+    default:
+      CCTK_VERROR("Interpolation order %d for centering [%d,%d,%d] not "
+                  "yet supported",
+                  int(interpolation_order), (centering >> 2) & 1,
+                  (centering >> 1) & 1, centering & 1);
+    } // switch interpolation_order
+    break;
+  } // case 0b111
+
+  default:
+    CCTK_VERROR("Centering [%d,%d,%d] not yet supported", (centering >> 2) & 1,
+               (centering >> 1) & 1, centering & 1);
+  } // switch centering
+
+  for (int n = 0; n < np; ++n)
+    varresult[n] = CCTK_REAL(result[n]);
+}
 
 } // namespace
 
@@ -714,16 +841,10 @@ void CarpetX::InterpolationSetup::Interpolate(
           const int gi = givis.at(v).gi;
           const int vi = givis.at(v).vi;
           const auto &restrict groupdata = *leveldata.groupdata.at(gi);
-          if (vartype_is_real4(groupdata.vartype))
-            CCTK_VERROR("Interpolation is not yet supported for CCTK_REAL4 "
-                       "grid function group %s",
-                       groupdata.groupname.c_str());
           const int centering = groupdata.indextype[0] * 0b100 +
                                 groupdata.indextype[1] * 0b010 +
                                 groupdata.indextype[2] * 0b001;
           assert(all(groupdata.nghostzones == grid.nghostzones));
-          const amrex::Array4<const CCTK_REAL> &vars =
-              as_mfab_real(*groupdata.mfab.at(tl)).array(pti);
           vect<int, dim> derivs;
           int op = operations[v];
           while (op > 0) {
@@ -737,108 +858,23 @@ void CarpetX::InterpolationSetup::Interpolate(
           auto &varresult = varresults.at(v);
           varresult.resize(np);
 
-          switch (centering) {
-          case 0b000: {
-            // Vertex centering
-
-            switch (interpolation_order) {
-            case 0: {
-              const interpolator<CCTK_REAL, 0, 0b000> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 1: {
-              const interpolator<CCTK_REAL, 1, 0b000> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 2: {
-              const interpolator<CCTK_REAL, 2, 0b000> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 3: {
-              const interpolator<CCTK_REAL, 3, 0b000> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 4: {
-              const interpolator<CCTK_REAL, 4, 0b000> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            default:
-              CCTK_VERROR("Interpolation order %d for centering [%d,%d,%d] not "
-                          "yet supported",
-                          int(interpolation_order), groupdata.indextype[0],
-                          groupdata.indextype[1], groupdata.indextype[2]);
-            } // switch interpolation_order
-            break;
-          } // case 0b000
-
-          case 0b111: {
-            // Cell centering
-
-            switch (interpolation_order) {
-            case 0: {
-              const interpolator<CCTK_REAL, 0, 0b111> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 1: {
-              const interpolator<CCTK_REAL, 1, 0b111> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 2: {
-              const interpolator<CCTK_REAL, 2, 0b111> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 3: {
-              const interpolator<CCTK_REAL, 3, 0b111> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            case 4: {
-              const interpolator<CCTK_REAL, 4, 0b111> interp{
-                  grid,  gi,   vi,     patch,
-                  level, vars, derivs, patch_allowed_boundaries};
-              interp.interpolate3d(particles, varresult);
-              break;
-            }
-            default:
-              CCTK_VERROR("Interpolation order %d for centering [%d,%d,%d] not "
-                          "yet supported",
-                          int(interpolation_order), groupdata.indextype[0],
-                          groupdata.indextype[1], groupdata.indextype[2]);
-            } // switch interpolation_order
-            break;
-          } // case 0b111
-
-          default:
-            CCTK_VERROR("Centering [%d,%d,%d] not yet supported",
-                        groupdata.indextype[0], groupdata.indextype[1],
-                        groupdata.indextype[2]);
-          } // switch centering
+          // Dispatch on the group's storage precision. Coordinates and the
+          // returned varresult are always CCTK_REAL; only the source group's
+          // Array4/interpolator are instantiated at the group's own
+          // precision (CCTK_REAL4 for amrex::fMultiFab-backed groups).
+          if (vartype_is_real4(groupdata.vartype)) {
+            const amrex::Array4<const CCTK_REAL4> &vars =
+                std::get<amrex::fMultiFab>(*groupdata.mfab.at(tl)).array(pti);
+            interpolate_group<CCTK_REAL4>(
+                centering, interpolation_order, grid, gi, vi, patch, level,
+                vars, derivs, patch_allowed_boundaries, particles, varresult);
+          } else {
+            const amrex::Array4<const CCTK_REAL> &vars =
+                as_mfab_real(*groupdata.mfab.at(tl)).array(pti);
+            interpolate_group<CCTK_REAL>(
+                centering, interpolation_order, grid, gi, vi, patch, level,
+                vars, derivs, patch_allowed_boundaries, particles, varresult);
+          }
 
         } // for var
 
