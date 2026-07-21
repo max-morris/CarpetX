@@ -211,3 +211,31 @@ CCTK_REAL8 array8 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL8 grid array te
 CCTK_REAL4 array4 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL4 grid array test values"
 
 CCTK_REAL2 array2 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL2 grid array test values"
+
+
+
+# =============================================================================
+# Phase 5: aliased-FUNCTION sized-REAL argument/return-type coverage
+# =============================================================================
+#
+# Exercises the aliased-function grammar/binding-generation gap this
+# workflow closes (repos/flesh/src/piraha/pegs/interface.peg's
+# ret_type/arg_type rules, and CreateFunctionBindings.pl's ParseArgument
+# allow-list): a CCTK_REAL4 return type together with mixed CCTK_REAL8,
+# CCTK_REAL4, and CCTK_REAL2 argument types on the same aliased function.
+# TestReal4 both PROVIDES and USES this function (mirroring, e.g.,
+# Formaline's UniqueConfigID/UniqueBuildID/UniqueSimulationID, each of
+# which is likewise PROVIDES-and-USES'd by its own declaring thorn), so no
+# other thorn needs to be touched: src/testreal4_mixargs.cxx implements the
+# provider (TestReal4_MixArgs_Impl), and src/testreal4_mixargs_check.cxx (a
+# different translation unit) calls the alias and verifies the result.
+# C/C++ only: CCTK_REAL2 has no Fortran spelling (cctk_Types.h), so this
+# function must never be called from Fortran.
+
+CCTK_REAL4 FUNCTION TestReal4_MixArgs \
+    (CCTK_REAL8 IN a, CCTK_REAL4 IN b, CCTK_REAL2 IN c)
+
+PROVIDES FUNCTION TestReal4_MixArgs \
+    WITH TestReal4_MixArgs_Impl \
+    LANGUAGE C
+USES FUNCTION TestReal4_MixArgs

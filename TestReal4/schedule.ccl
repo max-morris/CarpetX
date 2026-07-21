@@ -79,6 +79,11 @@ if (run_periodic_test)
     LANG: C
     READS: state4(everywhere)
   } "Re-check the REAL4 test state everywhere, using the GF3D5 accessor family"
+
+  SCHEDULE TestReal4_MixArgs_Check AT poststep AFTER TestReal4_CheckGF3D5
+  {
+    LANG: C
+  } "Call the PROVIDES/USES FUNCTION TestReal4_MixArgs alias (CCTK_REAL4 return, CCTK_REAL8/REAL4/REAL2 args) with known values and verify the result -- aliased-function sized-REAL coverage, touches no grid variables"
 }
 
 
