@@ -592,9 +592,11 @@ int get_group_prolongation_order(const int gi) {
 
 // Precision-aware prolongation operator lookup. T = CCTK_REAL selects from
 // the (amrex::MultiFab-backed) REAL/REAL8 tables, T = CCTK_REAL4 from the
-// (amrex::fMultiFab-backed) CCTK_REAL4 tables; both axes of every table are
-// explicitly instantiated in the prolongate_3d_rf2_impl_*.cxx files (see
-// prolongate_3d_rf2.hxx's CARPETX_DECLARE_PROLONGATE_TABLE macro).
+// (amrex::fMultiFab-backed) CCTK_REAL4 tables, T = CCTK_REAL2 (if
+// HAVE_CCTK_REAL2) from the (hMultiFab-backed) CCTK_REAL2 tables; all axes
+// of every table are explicitly instantiated in the
+// prolongate_3d_rf2_impl_*.cxx files (see prolongate_3d_rf2.hxx's
+// CARPETX_DECLARE_PROLONGATE_TABLE macro).
 template <typename T>
 InterpolaterT<T> *
 get_interpolator_t(const std::string &prolongation_type,
@@ -653,6 +655,10 @@ template InterpolaterT<CCTK_REAL> *get_interpolator_t<CCTK_REAL>(
     const GHExt::PatchData::LevelData::GroupData &groupdata);
 template InterpolaterT<CCTK_REAL4> *get_interpolator_t<CCTK_REAL4>(
     const GHExt::PatchData::LevelData::GroupData &groupdata);
+#ifdef HAVE_CCTK_REAL2
+template InterpolaterT<CCTK_REAL2> *get_interpolator_t<CCTK_REAL2>(
+    const GHExt::PatchData::LevelData::GroupData &groupdata);
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -868,14 +874,27 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
   nghostzones = get_group_nghostzones(gi);
 
   // reads groupindex, indextype; see the comments on
-  // GroupData::interpolator_real8/interpolator_real4 in driver.hxx for why
-  // exactly one precision is set here
+  // GroupData::interpolator_real8/interpolator_real4/interpolator_real2 in
+  // driver.hxx for why exactly one precision is set here
+  interpolator_real8 = nullptr;
+  interpolator_real4 = nullptr;
+#ifdef HAVE_CCTK_REAL2
+  interpolator_real2 = nullptr;
+  if (vartype_is_real2(vartype)) {
+    // The prolongate_3d_rf2_impl_*.cxx tables now have a T=CCTK_REAL2 axis
+    // (see prolongate_3d_rf2.hxx's CARPETX_DECLARE_PROLONGATE_TABLE), so
+    // this is wired up like the other two precisions. Cross-level
+    // prolongation (MakeNewLevelFromCoarse/RemakeLevel, below, and
+    // SyncGroupsByDirI in schedule.cxx) now routes CCTK_REAL2 groups through
+    // fillpatch.cxx's FillPatch_*<hMultiFab> instantiations, just like the
+    // other two precisions.
+    interpolator_real2 = get_interpolator_t<CCTK_REAL2>(*this);
+  } else
+#endif
   if (vartype_is_real4(vartype)) {
-    interpolator_real8 = nullptr;
     interpolator_real4 = get_interpolator_t<CCTK_REAL4>(*this);
   } else {
     interpolator_real8 = get_interpolator_t<CCTK_REAL>(*this);
-    interpolator_real4 = nullptr;
   }
 
   // Periodic boundaries require (num interior points) >= (num ghost points)
@@ -944,6 +963,10 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
     if (have_fluxes) {
       if (vartype_is_real4(vartype))
         CCTK_VERROR("Flux registers are not yet supported for CCTK_REAL4 "
+                   "grid function group %s",
+                   groupname.c_str());
+      if (vartype_is_real2(vartype))
+        CCTK_VERROR("Flux registers are not yet supported for CCTK_REAL2 "
                    "grid function group %s",
                    groupname.c_str());
       assert((indextype == std::array<int, dim>{1, 1, 1}));
@@ -1030,6 +1053,11 @@ template void GHExt::PatchData::LevelData::GroupData::
     apply_boundary_conditions<amrex::MultiFab>(amrex::MultiFab &mfab) const;
 template void GHExt::PatchData::LevelData::GroupData::
     apply_boundary_conditions<amrex::fMultiFab>(amrex::fMultiFab &mfab) const;
+#ifdef HAVE_CCTK_REAL2
+template void
+GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions<hMultiFab>(
+    hMultiFab &mfab) const;
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1349,6 +1377,15 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
               std::get<amrex::fMultiFab>(*coarsegroupdata.mfab.at(tl)),
               patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
               groupdata.interpolator_real4, groupdata.bcrecs);
+#ifdef HAVE_CCTK_REAL2
+        else if (is_real2(*groupdata.mfab.at(tl)))
+          FillPatch_NewLevel(
+              groupdata, coarsegroupdata,
+              std::get<hMultiFab>(*groupdata.mfab.at(tl)),
+              std::get<hMultiFab>(*coarsegroupdata.mfab.at(tl)),
+              patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
+              groupdata.interpolator_real2, groupdata.bcrecs);
+#endif
         else
           FillPatch_NewLevel(groupdata, coarsegroupdata,
                             as_mfab_real(*groupdata.mfab.at(tl)),
@@ -1505,6 +1542,16 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
               std::get<amrex::fMultiFab>(*oldgroupdata.mfab.at(tl)),
               patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
               groupdata.interpolator_real4, groupdata.bcrecs);
+#ifdef HAVE_CCTK_REAL2
+        else if (is_real2(*groupdata.mfab.at(tl)))
+          FillPatch_RemakeLevel(
+              groupdata, coarsegroupdata,
+              std::get<hMultiFab>(*groupdata.mfab.at(tl)),
+              std::get<hMultiFab>(*coarsegroupdata.mfab.at(tl)),
+              std::get<hMultiFab>(*oldgroupdata.mfab.at(tl)),
+              patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
+              groupdata.interpolator_real2, groupdata.bcrecs);
+#endif
         else
           FillPatch_RemakeLevel(
               groupdata, coarsegroupdata, as_mfab_real(*groupdata.mfab.at(tl)),

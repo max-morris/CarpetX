@@ -221,6 +221,13 @@ void poison_invalid_gf(const active_levels_t &active_levels, const int gi,
     CCTK_REAL4 poison;
     poison_value.set_to_poison(poison);
     poison_loop(poison);
+#ifdef HAVE_CCTK_REAL2
+  } else if (vartype_is_real2(vartype)) {
+    const poison_value_t<CCTK_REAL2> poison_value;
+    CCTK_REAL2 poison;
+    poison_value.set_to_poison(poison);
+    poison_loop(poison);
+#endif
   } else {
     const poison_value_t<CCTK_REAL> poison_value;
     CCTK_REAL poison;
@@ -305,7 +312,7 @@ void check_valid_gf(const active_levels_t &active_levels, const int gi,
   assert(vartype_is_supported_real(vartype));
 
   // Templatized over the grid function's element type (CCTK_REAL for
-  // REAL groups, CCTK_REAL4 for REAL4 groups).
+  // REAL groups, CCTK_REAL4 for REAL4 groups, CCTK_REAL2 for REAL2 groups).
   const auto check_loop = [&](auto type_tag) {
     using T = decltype(type_tag);
 
@@ -315,8 +322,21 @@ void check_valid_gf(const active_levels_t &active_levels, const int gi,
       if (poison_value.is_poison(val))
         return true;
       using std::isnan;
-      if (nan_handling != nan_handling_t::allow_nans && isnan(val))
-        return true;
+      if (nan_handling != nan_handling_t::allow_nans) {
+#ifdef HAVE_CCTK_REAL2
+        // std::isnan has overloads for float/double/long double only;
+        // calling it with a bare CCTK_REAL2 (_Float16) is ambiguous because
+        // all three are equally-good conversion targets. Promote to float
+        // instead (exact and lossless: every binary16 value, including
+        // NaNs, is exactly representable in binary32).
+        if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+          if (isnan(float(val)))
+            return true;
+        } else
+#endif
+            if (isnan(val))
+          return true;
+      }
       return false;
     };
 
@@ -507,6 +527,10 @@ void check_valid_gf(const active_levels_t &active_levels, const int gi,
 
   if (vartype_is_real4(vartype))
     check_loop(CCTK_REAL4{});
+#ifdef HAVE_CCTK_REAL2
+  else if (vartype_is_real2(vartype))
+    check_loop(CCTK_REAL2{});
+#endif
   else
     check_loop(CCTK_REAL{});
 }
@@ -674,6 +698,10 @@ checksums_t calculate_checksums(
 
       if (vartype_is_real4(groupdata.vartype))
         process(CCTK_REAL4{});
+#ifdef HAVE_CCTK_REAL2
+      else if (vartype_is_real2(groupdata.vartype))
+        process(CCTK_REAL2{});
+#endif
       else
         process(CCTK_REAL{});
     }
@@ -761,6 +789,10 @@ void check_checksums(const checksums_t &checksums,
 
       if (vartype_is_real4(groupdata.vartype))
         process(CCTK_REAL4{});
+#ifdef HAVE_CCTK_REAL2
+      else if (vartype_is_real2(groupdata.vartype))
+        process(CCTK_REAL2{});
+#endif
       else
         process(CCTK_REAL{});
     }

@@ -3,6 +3,7 @@
 
 #include "interp_base.hxx"
 #include "loop.hxx"
+#include "mpi_typemap_real2.hxx"
 #include "valid.hxx"
 
 #include <rational.hxx>
@@ -109,26 +110,51 @@ public:
   virtual void ClearLevel(int level) override;
 };
 
-// Storage for a grid function group's data, at the precision (CCTK_REAL or
-// CCTK_REAL4) determined by the group's `vartype`
-using AnyMultiFab = std::variant<amrex::MultiFab, amrex::fMultiFab>;
+#ifdef HAVE_CCTK_REAL2
+// Storage for CCTK_REAL2 (binary16, `_Float16`) grid function groups. There
+// is no `amrex::hMultiFab` typedef upstream (unlike `amrex::fMultiFab` for
+// float), so we define our own here.
+using hMultiFab = amrex::FabArray<amrex::BaseFab<CCTK_REAL2> >;
+#endif
+
+// Storage for a grid function group's data, at the precision (CCTK_REAL,
+// CCTK_REAL4, or CCTK_REAL2) determined by the group's `vartype`
+using AnyMultiFab = std::variant<amrex::MultiFab, amrex::fMultiFab
+#ifdef HAVE_CCTK_REAL2
+                                 ,
+                                 hMultiFab
+#endif
+                                 >;
 
 // Storage precision of a Cactus real vartype: REAL and REAL8 are double
-// (CCTK_REAL_PRECISION==8 is asserted above), REAL4 is float. CCTK_REAL16 is
-// not supported.
+// (CCTK_REAL_PRECISION==8 is asserted above), REAL4 is float, REAL2 is
+// _Float16 (if HAVE_CCTK_REAL2). CCTK_REAL16 is not supported.
 inline bool vartype_is_real4(const int vartype) {
   return vartype == CCTK_VARIABLE_REAL4;
 }
 inline bool vartype_is_real8(const int vartype) {
   return vartype == CCTK_VARIABLE_REAL || vartype == CCTK_VARIABLE_REAL8;
 }
+inline bool vartype_is_real2(const int vartype) {
+#ifdef HAVE_CCTK_REAL2
+  return vartype == CCTK_VARIABLE_REAL2;
+#else
+  return false;
+#endif
+}
 inline bool vartype_is_supported_real(const int vartype) {
-  return vartype_is_real4(vartype) || vartype_is_real8(vartype);
+  return vartype_is_real4(vartype) || vartype_is_real8(vartype) ||
+         vartype_is_real2(vartype);
 }
 
 inline bool is_real4(const AnyMultiFab &mfab) {
   return std::holds_alternative<amrex::fMultiFab>(mfab);
 }
+#ifdef HAVE_CCTK_REAL2
+inline bool is_real2(const AnyMultiFab &mfab) {
+  return std::holds_alternative<hMultiFab>(mfab);
+}
+#endif
 
 inline amrex::MultiFab &as_mfab_real(AnyMultiFab &mfab) {
   return std::get<amrex::MultiFab>(mfab);
@@ -140,6 +166,11 @@ inline const amrex::MultiFab &as_mfab_real(const AnyMultiFab &mfab) {
 template <typename... Args>
 std::unique_ptr<AnyMultiFab> make_any_mfab(const int vartype, Args &&...args) {
   assert(vartype_is_supported_real(vartype));
+#ifdef HAVE_CCTK_REAL2
+  if (vartype_is_real2(vartype))
+    return std::make_unique<AnyMultiFab>(std::in_place_type<hMultiFab>,
+                                         std::forward<Args>(args)...);
+#endif
   if (vartype_is_real4(vartype))
     return std::make_unique<AnyMultiFab>(
         std::in_place_type<amrex::fMultiFab>, std::forward<Args>(args)...);
@@ -445,16 +476,30 @@ struct GHExt {
         // construction, from `vartype`) from the precision-appropriate
         // static instance table in prolongate_3d_rf2_impl_*.cxx via
         // get_interpolator_t<T>() (driver.cxx). Exactly one of
-        // `interpolator_real8`/`interpolator_real4` is non-null for any
-        // given group -- REAL/REAL8 (amrex::MultiFab-backed) groups get
-        // `interpolator_real8`, CCTK_REAL4 (amrex::fMultiFab-backed) ones
-        // get `interpolator_real4` -- mirroring AnyMultiFab's own
-        // precision split. fillpatch.cxx's templated FillPatch_*<MF>
-        // functions and their callers (schedule.cxx, driver.cxx's
-        // MakeNewLevelFromCoarse/RemakeLevel) select whichever of these two
-        // matches the group's AnyMultiFab alternative.
+        // `interpolator_real8`/`interpolator_real4`/`interpolator_real2` is
+        // non-null for any given group -- REAL/REAL8 (amrex::MultiFab-backed)
+        // groups get `interpolator_real8`, CCTK_REAL4
+        // (amrex::fMultiFab-backed) ones get `interpolator_real4`,
+        // CCTK_REAL2 (hMultiFab-backed) ones get `interpolator_real2` --
+        // mirroring AnyMultiFab's own precision split. fillpatch.cxx's
+        // templated FillPatch_*<MF> functions and their callers
+        // (schedule.cxx, driver.cxx's MakeNewLevelFromCoarse/RemakeLevel)
+        // select whichever of these matches the group's AnyMultiFab
+        // alternative.
+        //
+        // interpolator_real2 is populated and consumed the same way as the
+        // other two precisions (the prolongate_3d_rf2_impl_*.cxx tables have
+        // a T=CCTK_REAL2 axis, see prolongate_3d_rf2.hxx's
+        // CARPETX_DECLARE_PROLONGATE_TABLE): fillpatch.cxx's templated
+        // FillPatch_*<MF> functions are explicitly instantiated for
+        // MF=hMultiFab, and driver.cxx's MakeNewLevelFromCoarse/RemakeLevel
+        // and schedule.cxx's SyncGroupsByDirI route REAL2 groups through
+        // them.
         InterpolaterT<CCTK_REAL> *interpolator_real8 = nullptr;
         InterpolaterT<CCTK_REAL4> *interpolator_real4 = nullptr;
+#ifdef HAVE_CCTK_REAL2
+        InterpolaterT<CCTK_REAL2> *interpolator_real2 = nullptr;
+#endif
 
         std::array<std::array<boundary_t, dim>, 2> boundaries;
         bool all_faces_have_symmetries_or_boundaries() const;
@@ -554,6 +599,11 @@ GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions<
 extern template void
 GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions<
     amrex::fMultiFab>(amrex::fMultiFab &mfab) const;
+#ifdef HAVE_CCTK_REAL2
+extern template void
+GHExt::PatchData::LevelData::GroupData::apply_boundary_conditions<hMultiFab>(
+    hMultiFab &mfab) const;
+#endif
 
 // Monotonically increasing counter. Incremented whenever the AMR grid
 // hierarchy is invalidated (regridding, recovery). Starts at 0.

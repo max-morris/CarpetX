@@ -266,6 +266,22 @@ template <> struct ipoison_t<CCTK_REAL4> {
 };
 #endif
 
+#ifdef HAVE_CCTK_REAL2
+// Binary16 (CCTK_REAL2) quiet-NaN poison pattern. Layout: 1 sign bit, 5
+// exponent bits, 10 mantissa bits. Unlike the wider ipoison_t
+// specializations above, binary16's 10-bit mantissa is too narrow to hold
+// the 0xdead marker by simply adding it to a NaN base (that overflows into
+// the exponent field and can produce a non-NaN value), so the pattern below
+// bakes the low 10 bits of 0xdead directly into the mantissa instead:
+// sign=1, exponent=0x1f (all ones, i.e. NaN/Inf), mantissa=0x2ad (nonzero,
+// with its top bit set so this is a quiet, not signalling, NaN); the
+// resulting 16-bit pattern is 0xfead.
+template <> struct ipoison_t<CCTK_REAL2> {
+  const std::uint16_t value[1] = {0xfead};
+  static_assert(sizeof value == sizeof(CCTK_REAL2));
+};
+#endif
+
 template <> struct ipoison_t<CCTK_INT> {
   const std::uint32_t value[1] = {0xdeadbeef};
   static_assert(sizeof value == sizeof(CCTK_INT));
