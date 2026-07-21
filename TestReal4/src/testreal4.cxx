@@ -98,4 +98,15 @@ extern "C" void TestReal4_Check(CCTK_ARGUMENTS) {
   CCTK_VINFO("TestReal4: PASS (%d points)", n_checked);
 }
 
+// CarpetX's checkpoint/recovery only restores each group's interior (not
+// its ghost zones or outer boundary), so every group needs re-syncing
+// once after recovery, before any poststep/analysis routine (e.g.
+// TestReal4_Check, which reads "everywhere") runs again. This function is
+// a no-op: the SYNC clause on its schedule.ccl entry (AT
+// post_recover_variables) does the actual work, exactly like
+// TestOutput_Sync in TestOutput/src/TestOutput.cxx.
+extern "C" void TestReal4_PostRecover_Sync(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTSX_TestReal4_PostRecover_Sync;
+}
+
 } // namespace TestReal4

@@ -38,6 +38,23 @@ SCHEDULE TestReal4_Initialize AT initial
   SYNC: state4 state8
 } "Initialize REAL4 and REAL8 test states with a periodic analytic function"
 
+SCHEDULE TestReal4_PostRecover_ReinitRHS AT post_recover_variables
+{
+  LANG: C
+  WRITES: rhs8_evol(interior)
+  WRITES: rhs4_evol(interior)
+} "Re-zero-fill rhs8_evol/rhs4_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal4_PostRecover_Sync syncs them, for the same reason TestReal4_Evol_Initial zero-fills them at CCTK_INITIAL"
+
+SCHEDULE TestReal4_PostRecover_Sync AT post_recover_variables AFTER TestReal4_PostRecover_ReinitRHS
+{
+  LANG: C
+  OPTIONS: global
+  SYNC: state8 state4
+  SYNC: state8_2lev state4_2lev
+  SYNC: state8_bc state4_bc
+  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
+} "Re-sync every test group's ghost zones and outer boundary after checkpoint recovery (which only restores each group's interior), for the same reason -- and covering the same unconditional set of groups -- as the postregrid/postrestrict Sync items below"
+
 if (run_periodic_test)
 {
   SCHEDULE TestReal4_Check AT poststep

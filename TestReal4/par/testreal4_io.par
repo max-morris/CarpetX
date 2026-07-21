@@ -1,0 +1,123 @@
+# Phase 4 self-checking mixed-precision test: I/O services. Runs the same
+# single-level periodic ghost-sync self-test as par/testreal4.par (state8/
+# state4, TestReal4_Initialize/_Check/_CheckGF3D5), but with CarpetX's I/O
+# services (norms, openPMD, Silo, TSV) and checkpointing all enabled and
+# exercising both the CCTK_REAL8 (u8) and CCTK_REAL4 (u4) grid functions, to
+# verify those services are precision-generic (accept and correctly handle
+# REAL4 grid functions, not just REAL8).
+#
+# This parfile itself only checkpoints (at iteration 1) and terminates; see
+# par/testreal4_io_recover.par for the matching recovery leg, which resumes
+# from the checkpoint this parfile writes and continues the same self-test
+# (including TestReal4_Check) past the checkpoint/recovery boundary.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    TestReal4
+"
+
+Cactus::cctk_show_schedule = "no"
+Cactus::presync_mode = "mixed-error"
+
+Cactus::cctk_itlast = 1
+Cactus::terminate = "iteration"
+
+CarpetX::verbose = "no"
+CarpetX::poison_undefined_values = "yes"
+
+# Domain extent is 2 in each direction, an integer multiple of the
+# analytic function's period of 1, so that the ghost zones' periodic
+# images are reproduced exactly by the domain's periodic boundaries.
+CarpetX::xmin = -1.0
+CarpetX::ymin = -1.0
+CarpetX::zmin = -1.0
+CarpetX::xmax = +1.0
+CarpetX::ymax = +1.0
+CarpetX::zmax = +1.0
+
+CarpetX::ncells_x = 32
+CarpetX::ncells_y = 32
+CarpetX::ncells_z = 32
+
+# Unigrid: a single refinement level only.
+CarpetX::max_num_levels = 1
+
+CarpetX::ghost_size_x = 3
+CarpetX::ghost_size_y = 3
+CarpetX::ghost_size_z = 3
+
+Driver::periodic = "yes"
+Driver::periodic_x = "yes"
+Driver::periodic_y = "yes"
+Driver::periodic_z = "yes"
+
+CarpetX::reflection_x = "no"
+CarpetX::reflection_y = "no"
+CarpetX::reflection_z = "no"
+
+CarpetX::reflection_upper_x = "no"
+CarpetX::reflection_upper_y = "no"
+CarpetX::reflection_upper_z = "no"
+
+# --- File output -------------------------------------------------------
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::out_fileinfo = "axis labels"
+IO::parfile_write = no
+
+CarpetX::out_metadata = no
+
+# Norms: both the REAL8 and REAL4 test-state groups, so their norms can be
+# compared for agreement (see par/testreal4_io_recover.par and the
+# verification notes alongside this parfile).
+CarpetX::out_norm_vars = "
+    TestReal4::state8
+    TestReal4::state4
+"
+CarpetX::out_norm_omit_unstable = yes
+CarpetX::out_norm_omit_sumloc_for_backward_compatibility = yes
+
+# openPMD: this build's openPMD_api was built with the ADIOS2 backend only
+# (no HDF5 backend), so use ADIOS2_BP5 explicitly (rather than leaving it
+# at the default ADIOS2_auto, so the on-disk format is pinned) -- the
+# written .bp5 files can be inspected with ADIOS2's `bpls -l` to confirm
+# the REAL4 grid function is actually stored as a 32-bit float variable.
+CarpetX::openpmd_format = "ADIOS2_BP5"
+CarpetX::out_openpmd_vars = "
+    TestReal4::state8
+    TestReal4::state4
+"
+
+# Silo: both test-state groups.
+CarpetX::out_silo_vars = "
+    TestReal4::state8
+    TestReal4::state4
+"
+
+# TSV: both test-state groups.
+CarpetX::out_tsv = yes
+CarpetX::out_tsv_vars = "
+    TestReal4::state8
+    TestReal4::state4
+"
+
+# --- Checkpointing -------------------------------------------------------
+#
+# Checkpoint (via openPMD, so the same code path as the file output above)
+# once, at iteration 1, then terminate; par/testreal4_io_recover.par picks
+# up from that checkpoint. Parameter spellings copied from
+# TestOutput/test/checkpoint-openpmd.par.
+
+CarpetX::checkpoint_method = "openpmd"
+IO::checkpoint_dir = $parfile + "/checkpoints"
+IO::checkpoint_ID = no
+IO::checkpoint_every = 1
+IO::checkpoint_on_terminate = yes
+
+# This parfile activates TestReal4's original periodic self-test only.
+TestReal4::run_periodic_test = "yes"
+TestReal4::run_2lev_test = "no"
+TestReal4::run_bc_test = "no"
+TestReal4::run_evol_test = "no"

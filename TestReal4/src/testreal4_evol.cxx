@@ -62,6 +62,28 @@ extern "C" void TestReal4_Evol_PostStep(CCTK_ARGUMENTS) {
   // do nothing -- the SYNC: clause in schedule.ccl does the actual work
 }
 
+extern "C" void TestReal4_PostRecover_ReinitRHS(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTSX_TestReal4_PostRecover_ReinitRHS;
+
+  // rhs8_evol/rhs4_evol are TAGS='checkpoint="no"', so checkpoint/recovery
+  // never writes (or re-validates) them: CarpetX's recovery path marks
+  // every group invalid before reading the checkpoint, and only groups
+  // actually present in the checkpoint get their interior re-validated by
+  // that read, so these two groups are left invalid ("Recovering") even
+  // though TestReal4_Evol_Initial had already zero-filled (and validated)
+  // them earlier in this same recovery's CCTK_INITIAL re-run. Zero-fill
+  // them again here, for exactly the same reason (and with exactly the
+  // same value) as TestReal4_Evol_Initial above, so that
+  // TestReal4_PostRecover_Sync's SYNC of these groups (schedule.ccl, AT
+  // post_recover_variables) has a validly-written interior to work from.
+  grid.loop_int_device<1, 1, 1>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        r8_evol(p.I) = CCTK_REAL8(0);
+        r4_evol(p.I) = CCTK_REAL4(0);
+      });
+}
+
 extern "C" void TestReal4_Evol_RHS(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_Evol_RHS;
   DECLARE_CCTK_PARAMETERS;
