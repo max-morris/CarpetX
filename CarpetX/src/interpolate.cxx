@@ -374,7 +374,10 @@ template <typename T, int order, int centering> struct interpolator {
 
       assert(is_allowed);
 
-      const T res = !is_allowed ? -2 : interpolate<dim - 1>(i, di);
+      // R2: ternary result operand made T(-2) so the two branches have the
+      // same type (nvcc otherwise finds "int vs __half" ambiguous); CPU
+      // no-op.
+      const T res = !is_allowed ? T(-2) : interpolate<dim - 1>(i, di);
 
       varresult[n] = res;
     }

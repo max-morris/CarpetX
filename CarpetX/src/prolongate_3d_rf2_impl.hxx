@@ -1780,7 +1780,10 @@ void prolongate_3d_rf2<
                                                                   off[2]);
               // Fallback condition 1: The interpolated value introduces a new
               // extremum
-              T minval = +1 / T(0), maxval = -1 / T(0);
+              // D1: both operands must be T (not e.g. "int / T") so that
+              // this stays unambiguous for __half under nvcc, while
+              // remaining a CPU no-op.
+              T minval = T(+1) / T(0), maxval = T(-1) / T(0);
               for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                 for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
                   for (int di = sradi[0]; di <= sradi[1]; ++di) {
@@ -1812,7 +1815,9 @@ void prolongate_3d_rf2<
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk) -
                           crse(icrse[0] + (di - 1), icrse[1] + dj,
                                icrse[2] + dk);
-                      need_fallback_i |= s * s0 < 0;
+                      // D1: comparison operand made T(0) (s and s0 already
+                      // T-T, so this is __half-clean under nvcc; CPU no-op).
+                      need_fallback_i |= s * s0 < T(0);
                     }
                   }
                 }
@@ -1831,7 +1836,7 @@ void prolongate_3d_rf2<
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk) -
                           crse(icrse[0] + di, icrse[1] + (dj - 1),
                                icrse[2] + dk);
-                      need_fallback_j |= s * s0 < 0;
+                      need_fallback_j |= s * s0 < T(0);
                     }
                   }
                 }
@@ -1850,7 +1855,7 @@ void prolongate_3d_rf2<
                           crse(icrse[0] + di, icrse[1] + dj, icrse[2] + dk) -
                           crse(icrse[0] + di, icrse[1] + dj,
                                icrse[2] + (dk - 1));
-                      need_fallback_k |= s * s0 < 0;
+                      need_fallback_k |= s * s0 < T(0);
                     }
                   }
                 }
@@ -2204,7 +2209,10 @@ void prolongate_3d_rf2<
             const std::array<int, 2> sradk =
                 interp1d<CENTK, INTPK, ORDERK>().stencil_radius(shift[2],
                                                                 off[2]);
-            T minval = +1 / T(0), maxval = -1 / T(0);
+            // D1: both operands must be T (not e.g. "int / T") so that
+            // this stays unambiguous for __half under nvcc, while
+            // remaining a CPU no-op.
+            T minval = T(+1) / T(0), maxval = T(-1) / T(0);
             for (int comp = 0; comp < ncomps; ++comp) {
               for (int dk = sradk[0]; dk <= sradk[1]; ++dk) {
                 for (int dj = sradj[0]; dj <= sradj[1]; ++dj) {
@@ -2244,7 +2252,9 @@ void prolongate_3d_rf2<
                                comp) -
                           crse(icrse[0] + (di - 1), icrse[1] + dj,
                                icrse[2] + dk, comp);
-                      need_fallback_i |= s * s0 < 0;
+                      // D1: comparison operand made T(0) (s and s0 already
+                      // T-T, so this is __half-clean under nvcc; CPU no-op).
+                      need_fallback_i |= s * s0 < T(0);
                     }
                   }
                 }
@@ -2275,7 +2285,7 @@ void prolongate_3d_rf2<
                                comp) -
                           crse(icrse[0] + di, icrse[1] + (dj - 1),
                                icrse[2] + dk, comp);
-                      need_fallback_j |= s * s0 < 0;
+                      need_fallback_j |= s * s0 < T(0);
                     }
                   }
                 }
@@ -2305,7 +2315,7 @@ void prolongate_3d_rf2<
                                                icrse[2] + dk, comp) -
                                           crse(icrse[0] + di, icrse[1] + dj,
                                                icrse[2] + (dk - 1), comp);
-                      need_fallback_k |= s * s0 < 0;
+                      need_fallback_k |= s * s0 < T(0);
                     }
                   }
                 }
