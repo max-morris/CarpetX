@@ -153,9 +153,15 @@ extern "C" void TestReal4_2Lev_Check(CCTK_ARGUMENTS) {
   // amplitude (amplitude2_2lev * up to ~(1+2+3+4)*0.4 ~ a few), and each
   // term of the prolongation stencil's summation can independently round
   // by up to half's machine epsilon (~9.77e-4) of that magnitude.
+  // 4e-2 (not 1e-2): the reference value below is itself evaluated in
+  // CCTK_REAL2, and on CUDA (__half device intrinsics) its rounding chain
+  // differs from the host's _Float16 one, so host-calibrated 1e-2 (~2.5
+  // ulp at the largest checked magnitudes) is missed by up to ~3 ulp on
+  // the GPU. 4e-2 is the GPU Validation Plan's ~10-ulp binary16 bound at
+  // these amplitudes and still catches any non-roundoff defect.
   constexpr CCTK_REAL8 tolerance8 = 1.0e-9;
   constexpr CCTK_REAL4 tolerance4 = 1.0e-5f;
-  constexpr CCTK_REAL8 tolerance2 = 1.0e-2;
+  constexpr CCTK_REAL8 tolerance2 = 4.0e-2;
 
   int n_checked = 0;
 
@@ -245,10 +251,13 @@ extern "C" void TestReal4_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
   // averages two equally-spaced samples of a linear function, reproducing
   // its midpoint value), so only floating-point roundoff of the
   // prolongation (onto the fine level) and average-down (back onto the
-  // coarse level) arithmetic remains.
+  // coarse level) arithmetic remains. tolerance2 is 4e-2 for the same
+  // reason as in TestReal4_2Lev_Check: the CCTK_REAL2 reference value's
+  // device (__half) rounding chain differs from the host's _Float16 one
+  // by a few ulp (first observed as a -0.0117 miss on an A100).
   constexpr CCTK_REAL8 tolerance8 = 1.0e-9;
   constexpr CCTK_REAL4 tolerance4 = 1.0e-5f;
-  constexpr CCTK_REAL8 tolerance2 = 1.0e-2;
+  constexpr CCTK_REAL8 tolerance2 = 4.0e-2;
 
   int n_checked_x = 0, n_checked_y = 0, n_checked_z = 0;
 
