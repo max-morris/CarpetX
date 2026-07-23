@@ -124,6 +124,73 @@ CCTK_REAL2 state2_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
 
 
 
+# --- Phase 2: face-centered restriction test --------------------------------
+#
+# Face-centered (centering rank 2: vertex-centered along the face's own
+# normal direction, cell-centered in the two transverse directions -- see
+# StaggeredWaveToyX::fxstate/fystate/fzstate for the same convention, and
+# note this is the complement of the edge centerings above: {vcc}/{cvc}/
+# {ccv} rather than {cvv}/{vcv}/{vvc}) counterparts of
+# state8_2lev/state4_2lev/state2_2lev above, one set of three groups per
+# face direction. Ridden along on the same testreal4_2lev.par regrid, these
+# exercise CarpetX::Restrict's face-centered path (schedule.cxx) at all
+# three precisions: CCTK_REAL2 goes through the local, __half-clean
+# average_down_faces_local kernel (restrict_edges.hxx), because upstream
+# AMReX's own FAB-templated point kernel for faces (amrex_avgdown_faces)
+# computes a `T(1.0) / int` expression that is not __half-clean as of AMReX
+# 25.11; CCTK_REAL4/CCTK_REAL8 go through that stock, unmodified
+# amrex::average_down_faces instead, since float/double are unaffected by
+# the __half ambiguity (see src/testreal4_2lev.cxx's
+# TestReal4_2Lev_FaceCheck and the schedule.ccl comment above the relevant
+# SYNC items).
+
+CCTK_REAL8 state8_facex TYPE=gf CENTERING={vcc} TAGS='dirichlet_values={0.0}'
+{
+  u8_facex
+} "REAL8 linear test state, face-centered normal to x, for the restriction test"
+
+CCTK_REAL4 state4_facex TYPE=gf CENTERING={vcc} TAGS='dirichlet_values={0.0}'
+{
+  u4_facex
+} "REAL4 linear test state, face-centered normal to x, for the restriction test"
+
+CCTK_REAL2 state2_facex TYPE=gf CENTERING={vcc} TAGS='dirichlet_values={0.0}'
+{
+  u2_facex
+} "REAL2 linear test state, face-centered normal to x, for the restriction test"
+
+CCTK_REAL8 state8_facey TYPE=gf CENTERING={cvc} TAGS='dirichlet_values={0.0}'
+{
+  u8_facey
+} "REAL8 linear test state, face-centered normal to y, for the restriction test"
+
+CCTK_REAL4 state4_facey TYPE=gf CENTERING={cvc} TAGS='dirichlet_values={0.0}'
+{
+  u4_facey
+} "REAL4 linear test state, face-centered normal to y, for the restriction test"
+
+CCTK_REAL2 state2_facey TYPE=gf CENTERING={cvc} TAGS='dirichlet_values={0.0}'
+{
+  u2_facey
+} "REAL2 linear test state, face-centered normal to y, for the restriction test"
+
+CCTK_REAL8 state8_facez TYPE=gf CENTERING={ccv} TAGS='dirichlet_values={0.0}'
+{
+  u8_facez
+} "REAL8 linear test state, face-centered normal to z, for the restriction test"
+
+CCTK_REAL4 state4_facez TYPE=gf CENTERING={ccv} TAGS='dirichlet_values={0.0}'
+{
+  u4_facez
+} "REAL4 linear test state, face-centered normal to z, for the restriction test"
+
+CCTK_REAL2 state2_facez TYPE=gf CENTERING={ccv} TAGS='dirichlet_values={0.0}'
+{
+  u2_facez
+} "REAL2 linear test state, face-centered normal to z, for the restriction test"
+
+
+
 # --- Phase 2: physical boundary condition test ------------------------------
 #
 # Cell-centred, to also exercise the CC boundary condition code path (the
