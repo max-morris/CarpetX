@@ -405,7 +405,15 @@ void BoundaryCondition<T>::apply_on_face_symbcxyz(
 
         T val;
         if constexpr (any(boundaries == boundary_t::dirichlet)) {
-          val = dirichlet_value;
+          // H2 (mixed precision, CCTK_REAL2 -> __half under nvcc): make the
+          // CCTK_REAL(double) -> T narrowing explicit. `_Float16` (gcc)
+          // accepts an implicit double->_Float16 assignment, but `__half`
+          // (nvcc)'s converting constructor from a floating type is more
+          // restrictive, so an implicit conversion here that compiles
+          // under gcc is not guaranteed to under nvcc; an explicit T(...)
+          // cast is unambiguous and identical in value on both, and a
+          // complete no-op for T=CCTK_REAL8/CCTK_REAL4 (T(x) == x there).
+          val = T(dirichlet_value);
         } else {
           val = var(src);
 #ifdef CCTK_DEBUG

@@ -30,7 +30,19 @@ constexpr CCTK_REAL4 dirichlet_value4_bc = 4.25f;
 // so the single conversion applied when storing the dirichlet constant
 // introduces no rounding at all -- the exact-representable value D9 asks
 // for where feasible.
-constexpr CCTK_REAL2 dirichlet_value2_bc = CCTK_REAL2(3.5);
+// H2 (mixed precision, CCTK_REAL2 -> __half under nvcc): this used to be
+// `constexpr CCTK_REAL2 dirichlet_value2_bc = CCTK_REAL2(3.5);`. Under
+// nvcc, CCTK_REAL2 is `__half` (see cctk_Types.h), whose converting
+// constructor from a floating literal is not usable in a constant
+// expression as of CUDA 12.2, so that declaration would fail to compile
+// under nvcc (it compiles under gcc, where CCTK_REAL2 is `_Float16`,
+// whose conversions are constexpr). Unlike initial_value2_bc below, this
+// constant is read only from TestReal4_BC_Check, a host-only function
+// (grid.loop_all, no CCTK_DEVICE lambda) -- so it needs no compile-time
+// (device-embeddable) value, and simply demoting it to a runtime-
+// initialized `const` (identical value, computed once at static
+// initialization instead of at compile time) is sufficient and CPU-safe.
+const CCTK_REAL2 dirichlet_value2_bc = CCTK_REAL2(3.5);
 
 // Initial interior value, deliberately different from the dirichlet values
 // above so that a boundary condition failure (e.g. the dirichlet condition
@@ -38,7 +50,14 @@ constexpr CCTK_REAL2 dirichlet_value2_bc = CCTK_REAL2(3.5);
 // is unambiguously detected.
 constexpr CCTK_REAL8 initial_value8_bc = 0.0;
 constexpr CCTK_REAL4 initial_value4_bc = 0.0f;
-constexpr CCTK_REAL2 initial_value2_bc = CCTK_REAL2(0.0);
+// H2: unlike dirichlet_value2_bc above, this constant *is* read from
+// inside the CCTK_DEVICE lambda in TestReal4_BC_Initialize below, so
+// demoting it to plain `const` would not work (a non-constexpr host
+// global is not accessible from device code). Keep it in `float` instead
+// -- fully constexpr and device-usable on every compiler, and exactly
+// representable in binary16 as well (0.0) -- and narrow it to CCTK_REAL2
+// at the point of use, a plain runtime conversion.
+constexpr float initial_value2_bc = 0.0f;
 
 extern "C" void TestReal4_BC_Initialize(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_BC_Initialize;
@@ -49,7 +68,7 @@ extern "C" void TestReal4_BC_Initialize(CCTK_ARGUMENTS) {
       [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
         u8_bc(p.I) = initial_value8_bc;
         u4_bc(p.I) = initial_value4_bc;
-        u2_bc(p.I) = initial_value2_bc;
+        u2_bc(p.I) = CCTK_REAL2(initial_value2_bc);
       });
 }
 

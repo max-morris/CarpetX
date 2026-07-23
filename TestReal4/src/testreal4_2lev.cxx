@@ -47,7 +47,20 @@ constexpr T linear_analytic(const T amplitude, const T x, const T y,
 // grid function a mismatch came from; they carry no other significance.
 constexpr CCTK_REAL8 amplitude8_2lev = 1.0;
 constexpr CCTK_REAL4 amplitude4_2lev = 2.0f;
-constexpr CCTK_REAL2 amplitude2_2lev = CCTK_REAL2(1.5);
+// H2 (mixed precision, CCTK_REAL2 -> __half under nvcc): this used to be
+// `constexpr CCTK_REAL2 amplitude2_2lev = CCTK_REAL2(1.5);`, referenced
+// directly (via `linear_analytic<CCTK_REAL2>`) from inside the
+// CCTK_DEVICE lambdas below. Under nvcc, CCTK_REAL2 is `__half` (see
+// cctk_Types.h), whose converting constructor from a floating literal is
+// not usable in a constant expression as of CUDA 12.2, so that
+// declaration would fail to compile under nvcc (it compiles under gcc,
+// where CCTK_REAL2 is `_Float16`, whose conversions are constexpr). Keep
+// the constant in `float` -- fully constexpr and device-usable on every
+// compiler -- and narrow it to CCTK_REAL2 at each call site instead (a
+// plain, non-constexpr runtime conversion, exactly like the CCTK_REAL2(p.x)
+// conversions already done for the other arguments at those same call
+// sites).
+constexpr float amplitude2_2lev = 1.5f;
 
 extern "C" void TestReal4_2Lev_Initialize(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_2Lev_Initialize;
@@ -68,7 +81,7 @@ extern "C" void TestReal4_2Lev_Initialize(CCTK_ARGUMENTS) {
         // not std:: library overloads, so there is no ambiguity to work
         // around.
         u2_2lev(p.I) = linear_analytic<CCTK_REAL2>(
-            amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y),
+            CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y),
             CCTK_REAL2(p.z));
       });
 
@@ -88,7 +101,7 @@ extern "C" void TestReal4_2Lev_Initialize(CCTK_ARGUMENTS) {
             amplitude4_2lev, CCTK_REAL4(p.x), CCTK_REAL4(p.y),
             CCTK_REAL4(p.z));
         u2_edgex(p.I) = linear_analytic<CCTK_REAL2>(
-            amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y),
+            CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y),
             CCTK_REAL2(p.z));
       });
 
@@ -101,7 +114,7 @@ extern "C" void TestReal4_2Lev_Initialize(CCTK_ARGUMENTS) {
             amplitude4_2lev, CCTK_REAL4(p.x), CCTK_REAL4(p.y),
             CCTK_REAL4(p.z));
         u2_edgey(p.I) = linear_analytic<CCTK_REAL2>(
-            amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y),
+            CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y),
             CCTK_REAL2(p.z));
       });
 
@@ -114,7 +127,7 @@ extern "C" void TestReal4_2Lev_Initialize(CCTK_ARGUMENTS) {
             amplitude4_2lev, CCTK_REAL4(p.x), CCTK_REAL4(p.y),
             CCTK_REAL4(p.z));
         u2_edgez(p.I) = linear_analytic<CCTK_REAL2>(
-            amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y),
+            CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y),
             CCTK_REAL2(p.z));
       });
 }
@@ -182,7 +195,7 @@ extern "C" void TestReal4_2Lev_Check(CCTK_ARGUMENTS) {
           double(tolerance4));
 
     const CCTK_REAL2 good2 = linear_analytic<CCTK_REAL2>(
-        amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
+        CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
     const CCTK_REAL2 have2 = u2_2lev(p.I);
     // Widen to double before subtracting/abs: see testreal4.cxx's
     // analytic2 comment for why std::abs(CCTK_REAL2) is itself ambiguous.
@@ -270,7 +283,7 @@ extern "C" void TestReal4_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
           double(tolerance4));
 
     const CCTK_REAL2 good2 = linear_analytic<CCTK_REAL2>(
-        amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
+        CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
     const CCTK_REAL2 have2 = u2_edgex(p.I);
     const CCTK_REAL8 err2 = double(have2) - double(good2);
     if (abs(err2) > tolerance2)
@@ -316,7 +329,7 @@ extern "C" void TestReal4_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
           double(tolerance4));
 
     const CCTK_REAL2 good2 = linear_analytic<CCTK_REAL2>(
-        amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
+        CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
     const CCTK_REAL2 have2 = u2_edgey(p.I);
     const CCTK_REAL8 err2 = double(have2) - double(good2);
     if (abs(err2) > tolerance2)
@@ -362,7 +375,7 @@ extern "C" void TestReal4_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
           double(tolerance4));
 
     const CCTK_REAL2 good2 = linear_analytic<CCTK_REAL2>(
-        amplitude2_2lev, CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
+        CCTK_REAL2(amplitude2_2lev), CCTK_REAL2(p.x), CCTK_REAL2(p.y), CCTK_REAL2(p.z));
     const CCTK_REAL2 have2 = u2_edgez(p.I);
     const CCTK_REAL8 err2 = double(have2) - double(good2);
     if (abs(err2) > tolerance2)

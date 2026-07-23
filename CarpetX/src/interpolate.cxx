@@ -1,6 +1,7 @@
 #include "driver.hxx"
 #include "interp.hxx"
 #include "mpi_types.hxx"
+#include "real2_limits.hxx"
 #include "reduction.hxx"
 #include "schedule.hxx"
 
@@ -70,8 +71,14 @@ template <typename T, int order, int centering> struct interpolator {
     // issue as std::isnan, see valid.cxx); compute in float and narrow to T
     // (a no-op for T=CCTK_REAL/CCTK_REAL4, a narrowing float->_Float16 for
     // T=CCTK_REAL2).
+    // H2 (mixed precision, CCTK_REAL2 -> __half under nvcc):
+    // std::numeric_limits<T>::epsilon() would silently return 0 for
+    // T=CCTK_REAL2 under nvcc (no std::numeric_limits<__half>
+    // specialization exists there, unlike gcc's std::numeric_limits<
+    // _Float16>) -- see real2_limits.hxx. Route through portable_epsilon<T>
+    // instead, which is correct for both.
     using std::pow;
-    return T(pow(float(std::numeric_limits<T>::epsilon()), float(3) / 4));
+    return T(pow(float(portable_epsilon<T>()), float(3) / 4));
   }
 
   // TODO: Check whether interpolated variables are valid

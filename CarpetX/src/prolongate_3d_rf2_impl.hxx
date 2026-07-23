@@ -2,6 +2,7 @@
 #define CARPETX_CARPETX_PROLONGATE_3D_RF2_IMPL_HXX
 
 #include "prolongate_3d_rf2.hxx"
+#include "real2_limits.hxx"
 
 #include "timer.hxx"
 
@@ -524,8 +525,22 @@ template <int ORDER> struct interp1d<VC, POLY, ORDER> {
     if (off == 0)
       return crse(0);
 
+    // D5/H2 (mixed precision, CCTK_REAL2): as for interp1d<CC, POLY, ORDER>
+    // below, `coeffs1d<VC, POLY, ORDER, T>::coeffs` is a `static constexpr`
+    // member whose initializer performs CCTK_REAL2 arithmetic (`+1 /
+    // T(2)`-style ratios) when T=CCTK_REAL2. Under nvcc, CCTK_REAL2 is
+    // `__half` (see cctk_Types.h), whose converting constructor from an
+    // integer/floating literal is not usable in a constant expression as of
+    // CUDA 12.2, so instantiating that member for T=CCTK_REAL2 would fail
+    // to compile under nvcc even though it compiles fine under gcc (where
+    // CCTK_REAL2 is `_Float16`, whose arithmetic and conversions *are*
+    // constexpr). Look up the coefficient table and accumulate in the
+    // wider compute type CT (float, which is constexpr-safe on every
+    // compiler) whenever T is CCTK_REAL2, narrowing only the final
+    // returned value back to T; a no-op for T=REAL8/REAL4, where CT=T.
+    using CT = prolongate_compute_t<T>;
     constexpr int N = ORDER + 1;
-    constexpr std::array<T, N> cs = coeffs1d<VC, POLY, ORDER, T>::coeffs;
+    constexpr std::array<CT, N> cs = coeffs1d<VC, POLY, ORDER, CT>::coeffs;
     const int i0 = N / 2 - off;
 
     // nvcc doesn't accept the constexpr terms below
@@ -547,19 +562,19 @@ template <int ORDER> struct interp1d<VC, POLY, ORDER> {
     static_assert(abs0(i1max - i0max) <= required_ghosts);
 #endif
 
-    T y = 0;
+    CT y = 0;
     // Make use of symmetry in coefficients
     for (int i = 0; i < N / 2; ++i) {
       const int i1 = ORDER - i;
 #ifdef CCTK_DEBUG
       assert(cs[i1] == cs[i]);
 #endif
-      y += cs[i] * (crse(i - i0) + crse(i1 - i0));
+      y += cs[i] * (CT(crse(i - i0)) + CT(crse(i1 - i0)));
     }
 #ifdef CCTK_DEBUG
     assert(prolongate_isfinite(y));
 #endif
-    return y;
+    return T(y);
   }
 };
 
@@ -651,8 +666,14 @@ template <int ORDER> struct interp1d<VC, HERMITE, ORDER> {
     if (off == 0)
       return crse(0);
 
+    // D5/H2 (mixed precision, CCTK_REAL2): see the comment in interp1d<VC,
+    // POLY, ORDER> above -- this reuses that same coeffs1d<VC, POLY, ...>
+    // table (Hermite prolongation borrows the polynomial coefficients), so
+    // the same nvcc/__half constexpr-construction hazard applies; look up
+    // the table and accumulate in CT (a no-op for T=REAL8/REAL4).
+    using CT = prolongate_compute_t<T>;
     constexpr int N = ORDER + 1;
-    constexpr std::array<T, N> cs = coeffs1d<VC, POLY, N - 1, T>::coeffs;
+    constexpr std::array<CT, N> cs = coeffs1d<VC, POLY, N - 1, CT>::coeffs;
     const int i0 = N / 2 - off;
 #ifndef __CUDACC__
     constexpr int i0min = N / 2 - 1;
@@ -673,19 +694,19 @@ template <int ORDER> struct interp1d<VC, HERMITE, ORDER> {
     static_assert(abs0(i1max - i0max) <= required_ghosts);
 #endif
 
-    T y = 0;
+    CT y = 0;
     // Make use of symmetry in coefficients
     for (int i = 0; i < N / 2; ++i) {
       const int i1 = N - 1 - i;
 #ifdef CCTK_DEBUG
       assert(cs[i1] == cs[i]);
 #endif
-      y += cs[i] * (crse(i - i0) + crse(i1 - i0));
+      y += cs[i] * (CT(crse(i - i0)) + CT(crse(i1 - i0)));
     }
 #ifdef CCTK_DEBUG
     assert(prolongate_isfinite(y));
 #endif
-    return y;
+    return T(y);
   }
 };
 
@@ -718,26 +739,33 @@ template <int ORDER> struct interp1d<VC, CONS, ORDER> {
     assert(off == 0 || off == 1);
 #endif
 
-    T y = 0;
+    // D5/H2 (mixed precision, CCTK_REAL2): as in interp1d<VC, POLY, ORDER>
+    // above, `coeffs1d<VC, CONS, ORDER, T>::coeffs0/coeffs1` are `static
+    // constexpr` members whose initializers do CCTK_REAL2 arithmetic when
+    // T=CCTK_REAL2, which is not constexpr-constructible under nvcc's
+    // `__half`. Look up the tables and accumulate in CT instead (a no-op
+    // for T=REAL8/REAL4), narrowing only the final result to T.
+    using CT = prolongate_compute_t<T>;
+    CT y = 0;
     // TODO: use symmetry
     if (off == 0) {
       constexpr int i0 = ORDER / 2;
-      constexpr std::array<T, ORDER / 2 * 2 + 1> cs =
-          coeffs1d<VC, CONS, ORDER, T>::coeffs0;
+      constexpr std::array<CT, ORDER / 2 * 2 + 1> cs =
+          coeffs1d<VC, CONS, ORDER, CT>::coeffs0;
       for (int i = 0; i < ORDER / 2 * 2 + 1; ++i)
-        y += cs[i] * crse(i - i0);
+        y += cs[i] * CT(crse(i - i0));
     } else {
       constexpr int i0 = (ORDER + 1) / 2 - 1;
-      constexpr std::array<T, (ORDER + 1) / 2 * 2> cs =
-          coeffs1d<VC, CONS, ORDER, T>::coeffs1;
+      constexpr std::array<CT, (ORDER + 1) / 2 * 2> cs =
+          coeffs1d<VC, CONS, ORDER, CT>::coeffs1;
       // The ROCM 6.2 compiler can't handle `cs[i]`, so we avoid it via
       // pointers: for (int i = 0; i < (ORDER + 1) / 2 * 2; ++i)
       //   y += cs[i] * crse(i - i0);
-      const T *restrict const csptr = cs.data();
+      const CT *restrict const csptr = cs.data();
       for (int i = 0; i < (ORDER + 1) / 2 * 2; ++i)
-        y += csptr[i] * crse(i - i0);
+        y += csptr[i] * CT(crse(i - i0));
     }
-    return y;
+    return T(y);
   }
 };
 
@@ -766,8 +794,15 @@ template <int ORDER> struct interp1d<CC, CONS, ORDER> {
     assert(off == 0 || off == 1);
 #endif
 
+    // D5/H2 (mixed precision, CCTK_REAL2): as in interp1d<VC, POLY, ORDER>
+    // above, `coeffs1d<CC, CONS, ORDER, T>::coeffs` is a `static constexpr`
+    // member whose initializer does CCTK_REAL2 arithmetic when T=CCTK_REAL2,
+    // which is not constexpr-constructible under nvcc's `__half`. Look up
+    // the table and accumulate in CT instead (a no-op for T=REAL8/REAL4),
+    // narrowing only the final result to T.
+    using CT = prolongate_compute_t<T>;
     constexpr int N = ORDER + 1;
-    constexpr std::array<T, N> cs = coeffs1d<CC, CONS, N - 1, T>::coeffs;
+    constexpr std::array<CT, N> cs = coeffs1d<CC, CONS, N - 1, CT>::coeffs;
     constexpr int i0 = N / 2;
 #ifndef __CUDACC__
     constexpr int imin = 0;
@@ -778,27 +813,27 @@ template <int ORDER> struct interp1d<CC, CONS, ORDER> {
     static_assert(abs0(imax - i0) <= required_ghosts);
 #endif
 
-    T y;
+    CT y;
     if (ORDER % 2 == 0) {
       if (off == 0) {
-        y = cs[ORDER / 2] * crse(ORDER / 2 - i0);
+        y = cs[ORDER / 2] * CT(crse(ORDER / 2 - i0));
         // Make use of symmetry in coefficients
         for (int i = 0; i < ORDER / 2; ++i) {
           const int i1 = ORDER - i;
 #ifdef CCTK_DEBUG
           assert(cs[i1] == -cs[i]);
 #endif
-          y += cs[i] * (crse(i - i0) - crse(i1 - i0));
+          y += cs[i] * (CT(crse(i - i0)) - CT(crse(i1 - i0)));
         }
       } else {
-        y = cs[ORDER / 2] * crse(ORDER / 2 - i0);
+        y = cs[ORDER / 2] * CT(crse(ORDER / 2 - i0));
         // Make use of symmetry in coefficients
         for (int i = 0; i < ORDER / 2; ++i) {
           const int i1 = ORDER - i;
 #ifdef CCTK_DEBUG
           assert(cs[i1] == -cs[i]);
 #endif
-          y += cs[i] * (crse(i1 - i0) - crse(i - i0));
+          y += cs[i] * (CT(crse(i1 - i0)) - CT(crse(i - i0)));
         }
       }
     } else {
@@ -807,7 +842,7 @@ template <int ORDER> struct interp1d<CC, CONS, ORDER> {
         for (int i = 0; i < N; ++i) {
           assert(i - i0 >= -((ORDER + 1) / 2));
           assert(i - i0 <= +(ORDER / 2));
-          y += cs[i] * crse(i - i0);
+          y += cs[i] * CT(crse(i - i0));
         }
       } else {
         y = 0;
@@ -816,13 +851,13 @@ template <int ORDER> struct interp1d<CC, CONS, ORDER> {
           static_assert((+((ORDER + 1) / 2)) - (-(ORDER / 2)) + 1 == N);
           assert((ORDER + 1) / 2 - i >= -(ORDER / 2));
           assert((ORDER + 1) / 2 - i <= +((ORDER + 1) / 2));
-          y += cs[i] * crse((ORDER + 1) / 2 - i);
+          y += cs[i] * CT(crse((ORDER + 1) / 2 - i));
           // TODO y += cs[(N - 1) - i] * crse(i + i0 + 1);
         }
       }
     }
 
-    return y;
+    return T(y);
   }
 };
 
@@ -920,18 +955,29 @@ template <int ORDER> struct interp1d<CC, ENO, ORDER> {
     // See above in `stencil_radius`
     assert(-(ORDER / 2) <= shift && shift <= +(ORDER / 2));
 #endif
+    // D5/H2 (mixed precision, CCTK_REAL2): `coeffs1d<CC, ENO, ORDER,
+    // T>::coeffs` is a `static constexpr` member whose initializer does
+    // CCTK_REAL2 arithmetic when T=CCTK_REAL2, which is not
+    // constexpr-constructible under nvcc's `__half` (this is true
+    // regardless of the fact that `css`/`cs` below are only ever read as
+    // plain `const`, not `constexpr`: the *class member's own*
+    // initializer must still be a constant expression at the point the
+    // template is instantiated for T=CCTK_REAL2). Look the table up and
+    // accumulate in CT instead (a no-op for T=REAL8/REAL4), narrowing only
+    // the final result to T.
     // For off=1, use the reversed stencil for the opposite shift
     // const std::array<T, ORDER + 1> cs =
     //     coeffs1d<CC, ENO, ORDER, T>::
     //     coeffs[ORDER / 2 + (off == 0 ? +1 : -1) * shift];
+    using CT = prolongate_compute_t<T>;
     constexpr int N = ORDER + 1;
-    const std::array<std::array<T, N>, N> css =
-        coeffs1d<CC, ENO, ORDER, T>::coeffs;
+    const std::array<std::array<CT, N>, N> css =
+        coeffs1d<CC, ENO, ORDER, CT>::coeffs;
     const int m = off == 0 ? shift - (-(ORDER / 2)) : (+(ORDER / 2)) - shift;
 #ifdef CCTK_DEBUG
     assert(m >= 0 && m < N);
 #endif
-    const std::array<T, N> &cs = css[m];
+    const std::array<CT, N> &cs = css[m];
     const int i0 = N / 2 - shift;
 
 #ifdef CCTK_DEBUG
@@ -941,14 +987,14 @@ template <int ORDER> struct interp1d<CC, ENO, ORDER> {
     assert(abs(imax - i0) <= required_ghosts);
 #endif
 
-    T y = 0;
+    CT y = 0;
     if (off == 0)
       for (int i = 0; i <= ORDER; ++i)
-        y += cs[i] * crse(i - i0);
+        y += cs[i] * CT(crse(i - i0));
     else
       for (int i = 0; i <= ORDER; ++i)
-        y += cs[ORDER - i] * crse(i - i0);
-    return y;
+        y += cs[ORDER - i] * CT(crse(i - i0));
+    return T(y);
   }
 };
 
@@ -1626,7 +1672,7 @@ void prolongate_3d_rf2<
 
                   // Prefer centred stencils
                   const T penalty =
-                      1 + sqrt(std::numeric_limits<T>::epsilon()) *
+                      1 + sqrt(portable_epsilon<T>()) *
                               (abs(si) + abs(sj) + abs(sk));
                   const T dd = penalty * fmax(fmax(ddx, ddy), ddz);
                   if (dd < min_dd) {
@@ -2074,7 +2120,7 @@ void prolongate_3d_rf2<
 
                 // Prefer centred stencils
                 const T penalty =
-                    1 + sqrt(std::numeric_limits<T>::epsilon()) *
+                    1 + sqrt(portable_epsilon<T>()) *
                             (abs(si) + abs(sj) + abs(sk));
                 const T dd = penalty * fmax(fmax(ddx, ddy), ddz);
                 if (dd < min_dd) {

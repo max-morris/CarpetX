@@ -36,7 +36,19 @@ constexpr T analytic(const T amplitude, const T x, const T y, const T z) {
 // grid function a mismatch came from; they carry no other significance.
 constexpr CCTK_REAL8 amplitude8 = 1.0;
 constexpr CCTK_REAL4 amplitude4 = 2.0f;
-constexpr CCTK_REAL2 amplitude2 = CCTK_REAL2(1.5);
+// H2 (mixed precision, CCTK_REAL2 -> __half under nvcc): this used to be
+// `constexpr CCTK_REAL2 amplitude2 = CCTK_REAL2(1.5);`, referenced directly
+// from inside the CCTK_DEVICE lambda in TestReal4_Initialize below. Under
+// nvcc, CCTK_REAL2 is `__half` (see cctk_Types.h), whose converting
+// constructor from a floating literal is not usable in a constant
+// expression as of CUDA 12.2, so that declaration would fail to compile
+// under nvcc (it compiles under gcc, where CCTK_REAL2 is `_Float16`, whose
+// conversions are constexpr). `analytic2` immediately widens its amplitude
+// to `float` anyway (see its comment below), so we simply keep the
+// constant in `float` -- fully constexpr and device-usable on every
+// compiler -- and let `analytic2` do the (runtime, on-device) narrowing
+// conversion to CCTK_REAL2 that it already does internally for its result.
+constexpr float amplitude2 = 1.5f;
 
 // D5 compute-type indirection: `analytic<T>` above calls std::acos/cos,
 // which (unlike ordinary arithmetic on CCTK_REAL2 = `_Float16`, which GCC
@@ -47,9 +59,9 @@ constexpr CCTK_REAL2 amplitude2 = CCTK_REAL2(1.5);
 // REAL2 analytic value is computed in `float` (which does have an
 // unambiguous std::cos/acos overload), and only the final result is
 // narrowed to CCTK_REAL2.
-static CCTK_REAL2 analytic2(const CCTK_REAL2 amplitude, const float x,
+static CCTK_REAL2 analytic2(const float amplitude, const float x,
                             const float y, const float z) {
-  return CCTK_REAL2(analytic<float>(float(amplitude), x, y, z));
+  return CCTK_REAL2(analytic<float>(amplitude, x, y, z));
 }
 
 extern "C" void TestReal4_Initialize(CCTK_ARGUMENTS) {
