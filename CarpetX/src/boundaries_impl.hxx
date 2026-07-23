@@ -430,7 +430,13 @@ void BoundaryCondition<T>::apply_on_face_symbcxyz(
                 const auto xi = xmin + src * dx;
                 const auto ri = sqrt(sum(pow2(xi)));
                 const auto q = ri / rb;
-                val = robin_value + q * (val - robin_value);
+                // D1 (mixed precision, CCTK_REAL2): `robin_value` and `q`
+                // are CCTK_REAL, `val` is T; `robin_value + q * (val -
+                // robin_value)` mixes CCTK_REAL8 with T, which is ambiguous
+                // under nvcc's `__half` (no implicit promotion, unlike
+                // gcc's `_Float16`). Do the arithmetic in CCTK_REAL and
+                // narrow once at the store.
+                val = T(robin_value + q * (CCTK_REAL(val) - robin_value));
               }
             }
           }
@@ -438,7 +444,12 @@ void BoundaryCondition<T>::apply_on_face_symbcxyz(
             // Calculate gradient
             const T grad = val - var(src + delta);
             using std::sqrt;
-            val += sqrt(sum(pow2(dst - src)) / sum(pow2(delta))) * grad;
+            // D1 (mixed precision, CCTK_REAL2): same CCTK_REAL-vs-T mixing
+            // as the Robin case above (`sqrt(...)` is CCTK_REAL, `grad` is
+            // T); compute in CCTK_REAL and narrow once at the store.
+            val = T(CCTK_REAL(val) +
+                     sqrt(sum(pow2(dst - src)) / sum(pow2(delta))) *
+                         CCTK_REAL(grad));
           }
 #ifdef CCTK_DEBUG
           for (int d = 0; d < dim; ++d)

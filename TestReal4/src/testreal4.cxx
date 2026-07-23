@@ -59,8 +59,14 @@ constexpr float amplitude2 = 1.5f;
 // REAL2 analytic value is computed in `float` (which does have an
 // unambiguous std::cos/acos overload), and only the final result is
 // narrowed to CCTK_REAL2.
-static CCTK_REAL2 analytic2(const float amplitude, const float x,
-                            const float y, const float z) {
+// C3 (mixed precision, CCTK_REAL2): nvcc rejects calling a plain __host__
+// function from inside a CCTK_DEVICE lambda ("calling a __host__ function
+// ... is not allowed"). `analytic2` is called from the CCTK_DEVICE lambda in
+// TestReal4_Initialize below (and, harmlessly, host-side too), so it needs
+// both annotations.
+static CCTK_DEVICE CCTK_HOST CCTK_REAL2 analytic2(const float amplitude,
+                                                  const float x, const float y,
+                                                  const float z) {
   return CCTK_REAL2(analytic<float>(amplitude, x, y, z));
 }
 

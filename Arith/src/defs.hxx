@@ -297,7 +297,11 @@ constexpr ARITH_INLINE ARITH_DEVICE ARITH_HOST T pown(const T &x, int n) {
 // Raise a value to an integer power, calculated efficiently
 template <typename T>
 constexpr ARITH_INLINE ARITH_DEVICE ARITH_HOST T pown(const T &x, const int n) {
-  return n >= 0 ? detail::pown(x, n) : 1 / detail::pown(x, -n);
+  // D1 (mixed precision, CCTK_REAL2): `1 / detail::pown(x, -n)` is `int /
+  // CCTK_REAL2` when T=CCTK_REAL2, ambiguous under nvcc's `__half` (no
+  // implicit promotion, unlike gcc's `_Float16`). Promote the numerator to T
+  // explicitly; a no-op for every other T.
+  return n >= 0 ? detail::pown(x, n) : T(1) / detail::pown(x, -n);
 }
 
 template <typename T>

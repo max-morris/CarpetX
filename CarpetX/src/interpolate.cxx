@@ -22,6 +22,7 @@
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -64,6 +65,21 @@ template <typename T, int order, int centering> struct interpolator {
 #endif
         vars(vars), derivs(derivs), allowed_boundaries(allowed_boundaries) {
   }
+
+  // D1 (mixed precision, CCTK_REAL2): a wider "compute type" used for the
+  // interpolation-weight arithmetic in `interpolate<dir>` below (and the
+  // particle-interpolation bookkeeping in `interpolate3d`). gcc's `_Float16`
+  // implicitly promotes in mixed arithmetic with `int`/`double` and matches
+  // <cmath> overloads via that promotion; nvcc's `__half` (CCTK_REAL2's
+  // CUDA-side representation) does neither, so `int / CCTK_REAL2`,
+  // `CCTK_REAL2 - CCTK_REAL8`, etc. are ambiguous or unresolved. Do the
+  // arithmetic in CT (float for CCTK_REAL2, T otherwise) and narrow once at
+  // the store.
+#ifdef HAVE_CCTK_REAL2
+  using CT = std::conditional_t<std::is_same_v<T, CCTK_REAL2>, float, T>;
+#else
+  using CT = T;
+#endif
 
   static constexpr T eps() {
     // std::pow has no _Float16 overload, and a bare _Float16 argument
@@ -127,7 +143,11 @@ template <typename T, int order, int centering> struct interpolator {
     // Ignore the centering for interpolation
     // switch ((centering >> (2 - dir)) & 1)
 
-    const T x = di[dir] - order / T(2);
+    // D1 (mixed precision, CCTK_REAL2): compute the interpolation weights and
+    // accumulate the stencil sum in CT rather than bare T; narrow only the
+    // final returned value back to T. `di[dir]` is CCTK_REAL, so this also
+    // removes a second, pre-existing CCTK_REAL8-vs-CCTK_REAL2 mixing.
+    const CT x = CT(di[dir]) - order / CT(2);
     // #ifdef CCTK_DEBUG
     //     using std::fabs;
     //     assert(fabs(x) <= T(0.5) + eps());
@@ -135,10 +155,10 @@ template <typename T, int order, int centering> struct interpolator {
 
     switch (order) {
     case 0: {
-      const T y0 = interpolate<dir - 1>(i, di);
+      const CT y0 = CT(interpolate<dir - 1>(i, di));
       switch (derivs[dir]) {
       case 0:
-        return y0;
+        return T(y0);
       case 1:
         return 0;
       case 2:
@@ -146,107 +166,109 @@ template <typename T, int order, int centering> struct interpolator {
       }
     }
     case 1: {
-      const T y0 = interpolate<dir - 1>(i, di);
-      const T y1 = interpolate<dir - 1>(i + DI, di);
+      const CT y0 = CT(interpolate<dir - 1>(i, di));
+      const CT y1 = CT(interpolate<dir - 1>(i + DI, di));
       switch (derivs[dir]) {
       case 0:
-        return (1 / T(2) - x) * y0 + (1 / T(2) + x) * y1;
+        return T((1 / CT(2) - x) * y0 + (1 / CT(2) + x) * y1);
       case 1:
-        return (-y0 + y1) / grid.dx[dir];
+        return T((-y0 + y1) / CT(grid.dx[dir]));
       case 2:
         return 0;
       }
     }
     case 2: {
-      const T y0 = interpolate<dir - 1>(i, di);
-      const T y1 = interpolate<dir - 1>(i + DI, di);
-      const T y2 = interpolate<dir - 1>(i + 2 * DI, di);
+      const CT y0 = CT(interpolate<dir - 1>(i, di));
+      const CT y1 = CT(interpolate<dir - 1>(i + DI, di));
+      const CT y2 = CT(interpolate<dir - 1>(i + 2 * DI, di));
       switch (derivs[dir]) {
       case 0:
-        return (-1 / T(2) * x + 1 / T(2) * pown(x, 2)) * y0 +
-               (1 - pown(x, 2)) * y1 +
-               (1 / T(2) * x + 1 / T(2) * pown(x, 2)) * y2;
+        return T((-1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y0 +
+                  (1 - pown(x, 2)) * y1 +
+                  (1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y2);
       case 1:
-        return ((-1 / T(2) + x) * y0 - 2 * x * y1 + (1 / T(2) + x) * y2) /
-               grid.dx[dir];
+        return T(((-1 / CT(2) + x) * y0 - 2 * x * y1 + (1 / CT(2) + x) * y2) /
+                  CT(grid.dx[dir]));
       case 2:
-        return (y0 - 2 * y1 + y2) / pown(grid.dx[dir], 2);
+        return T((y0 - 2 * y1 + y2) / pown(CT(grid.dx[dir]), 2));
       }
     }
     case 3: {
-      const T y0 = interpolate<dir - 1>(i, di);
-      const T y1 = interpolate<dir - 1>(i + DI, di);
-      const T y2 = interpolate<dir - 1>(i + 2 * DI, di);
-      const T y3 = interpolate<dir - 1>(i + 3 * DI, di);
+      const CT y0 = CT(interpolate<dir - 1>(i, di));
+      const CT y1 = CT(interpolate<dir - 1>(i + DI, di));
+      const CT y2 = CT(interpolate<dir - 1>(i + 2 * DI, di));
+      const CT y3 = CT(interpolate<dir - 1>(i + 3 * DI, di));
       switch (derivs[dir]) {
       case 0:
-        return (-1 / T(16) + 1 / T(24) * x + 1 / T(4) * pown(x, 2) -
-                1 / T(6) * pown(x, 3)) *
-                   y0 +
-               (9 / T(16) - 9 / T(8) * x - 1 / T(4) * pown(x, 2) +
-                1 / T(2) * pown(x, 3)) *
-                   y1 +
-               (9 / T(16) + 9 / T(8) * x - 1 / T(4) * pown(x, 2) -
-                1 / T(2) * pown(x, 3)) *
-                   y2 +
-               (-1 / T(16) - 1 / T(24) * x + 1 / T(4) * pown(x, 2) +
-                1 / T(6) * pown(x, 3)) *
-                   y3;
+        return T((-1 / CT(16) + 1 / CT(24) * x + 1 / CT(4) * pown(x, 2) -
+                  1 / CT(6) * pown(x, 3)) *
+                      y0 +
+                  (9 / CT(16) - 9 / CT(8) * x - 1 / CT(4) * pown(x, 2) +
+                   1 / CT(2) * pown(x, 3)) *
+                      y1 +
+                  (9 / CT(16) + 9 / CT(8) * x - 1 / CT(4) * pown(x, 2) -
+                   1 / CT(2) * pown(x, 3)) *
+                      y2 +
+                  (-1 / CT(16) - 1 / CT(24) * x + 1 / CT(4) * pown(x, 2) +
+                   1 / CT(6) * pown(x, 3)) *
+                      y3);
       case 1:
-        return ((1 / T(24) + 1 / T(2) * x - 1 / T(2) * pown(x, 2)) * y0 +
-                (-9 / T(8) - 1 / T(2) * x + 3 / T(2) * pown(x, 2)) * y1 +
-                (9 / T(8) - 1 / T(2) * x - 3 / T(2) * pown(x, 2)) * y2 +
-                (-1 / T(24) + 1 / T(2) * x + 1 / T(2) * pown(x, 2)) * y3) /
-               grid.dx[dir];
+        return T(((1 / CT(24) + 1 / CT(2) * x - 1 / CT(2) * pown(x, 2)) * y0 +
+                   (-9 / CT(8) - 1 / CT(2) * x + 3 / CT(2) * pown(x, 2)) * y1 +
+                   (9 / CT(8) - 1 / CT(2) * x - 3 / CT(2) * pown(x, 2)) * y2 +
+                   (-1 / CT(24) + 1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) *
+                       y3) /
+                  CT(grid.dx[dir]));
       case 2:
-        return ((1 / T(2) - x) * y0 + (-1 / T(2) + 3 * x) * y1 +
-                (-1 / T(2) - 3 * x) * y2 + (1 / T(2) + x) * y3) /
-               pown(grid.dx[dir], 2);
+        return T(((1 / CT(2) - x) * y0 + (-1 / CT(2) + 3 * x) * y1 +
+                   (-1 / CT(2) - 3 * x) * y2 + (1 / CT(2) + x) * y3) /
+                  pown(CT(grid.dx[dir]), 2));
       }
     }
     case 4: {
-      const T y0 = interpolate<dir - 1>(i, di);
-      const T y1 = interpolate<dir - 1>(i + DI, di);
-      const T y2 = interpolate<dir - 1>(i + 2 * DI, di);
-      const T y3 = interpolate<dir - 1>(i + 3 * DI, di);
-      const T y4 = interpolate<dir - 1>(i + 4 * DI, di);
+      const CT y0 = CT(interpolate<dir - 1>(i, di));
+      const CT y1 = CT(interpolate<dir - 1>(i + DI, di));
+      const CT y2 = CT(interpolate<dir - 1>(i + 2 * DI, di));
+      const CT y3 = CT(interpolate<dir - 1>(i + 3 * DI, di));
+      const CT y4 = CT(interpolate<dir - 1>(i + 4 * DI, di));
       switch (derivs[dir]) {
       case 0:
-        return (1 / T(12) * x - 1 / T(24) * pown(x, 2) -
-                1 / T(12) * pown(x, 3) + 1 / T(24) * pown(x, 4)) *
-                   y0 +
-               (-2 / T(3) * x + 2 / T(3) * pown(x, 2) + 1 / T(6) * pown(x, 3) -
-                1 / T(6) * pown(x, 4)) *
-                   y1 +
-               (1 - 5 / T(4) * pown(x, 2) + 1 / T(4) * pown(x, 4)) * y2 +
-               (2 / T(3) * x + 2 / T(3) * pown(x, 2) - 1 / T(6) * pown(x, 3) -
-                1 / T(6) * pown(x, 4)) *
-                   y3 +
-               (-1 / T(12) * x - 1 / T(24) * pown(x, 2) +
-                1 / T(12) * pown(x, 3) + 1 / T(24) * pown(x, 4)) *
-                   y4;
+        return T((1 / CT(12) * x - 1 / CT(24) * pown(x, 2) -
+                  1 / CT(12) * pown(x, 3) + 1 / CT(24) * pown(x, 4)) *
+                      y0 +
+                  (-2 / CT(3) * x + 2 / CT(3) * pown(x, 2) +
+                   1 / CT(6) * pown(x, 3) - 1 / CT(6) * pown(x, 4)) *
+                      y1 +
+                  (1 - 5 / CT(4) * pown(x, 2) + 1 / CT(4) * pown(x, 4)) * y2 +
+                  (2 / CT(3) * x + 2 / CT(3) * pown(x, 2) -
+                   1 / CT(6) * pown(x, 3) - 1 / CT(6) * pown(x, 4)) *
+                      y3 +
+                  (-1 / CT(12) * x - 1 / CT(24) * pown(x, 2) +
+                   1 / CT(12) * pown(x, 3) + 1 / CT(24) * pown(x, 4)) *
+                      y4);
       case 1:
-        return ((1 / T(12) - 1 / T(12) * x - 1 / T(4) * pown(x, 2) +
-                 1 / T(6) * pown(x, 3)) *
-                    y0 +
-                (-2 / T(3) + 4 / T(3) * x + 1 / T(2) * pown(x, 2) -
-                 2 / T(3) * pown(x, 3)) *
-                    y1 +
-                (-5 / T(2) * x + pown(x, 3)) * y2 +
-                (2 / T(3) + 4 / T(3) * x - 1 / T(2) * pown(x, 2) -
-                 2 / T(3) * pown(x, 3)) *
-                    y3 +
-                (-1 / T(12) - 1 / T(12) * x + 1 / T(4) * pown(x, 2) +
-                 1 / T(6) * pown(x, 3)) *
-                    y4) /
-               grid.dx[dir];
+        return T(((1 / CT(12) - 1 / CT(12) * x - 1 / CT(4) * pown(x, 2) +
+                   1 / CT(6) * pown(x, 3)) *
+                      y0 +
+                  (-2 / CT(3) + 4 / CT(3) * x + 1 / CT(2) * pown(x, 2) -
+                   2 / CT(3) * pown(x, 3)) *
+                      y1 +
+                  (-5 / CT(2) * x + pown(x, 3)) * y2 +
+                  (2 / CT(3) + 4 / CT(3) * x - 1 / CT(2) * pown(x, 2) -
+                   2 / CT(3) * pown(x, 3)) *
+                      y3 +
+                  (-1 / CT(12) - 1 / CT(12) * x + 1 / CT(4) * pown(x, 2) +
+                   1 / CT(6) * pown(x, 3)) *
+                      y4) /
+                  CT(grid.dx[dir]));
       case 2:
-        return ((-1 / T(12) - 1 / T(2) * x + 1 / T(2) * pown(x, 2)) * y0 +
-                (4 / T(3) + x - 2 * pown(x, 2)) * y1 +
-                (-5 / T(2) + 3 * pown(x, 2)) * y2 +
-                (4 / T(3) - x - 2 * pown(x, 2)) * y3 +
-                (-1 / T(12) + 1 / T(2) * x + 1 / T(2) * pown(x, 2)) * y4) /
-               pown(grid.dx[dir], 2);
+        return T(((-1 / CT(12) - 1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y0 +
+                  (4 / CT(3) + x - 2 * pown(x, 2)) * y1 +
+                  (-5 / CT(2) + 3 * pown(x, 2)) * y2 +
+                  (4 / CT(3) - x - 2 * pown(x, 2)) * y3 +
+                  (-1 / CT(12) + 1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) *
+                      y4) /
+                  pown(CT(grid.dx[dir]), 2));
       }
     }
     default:
@@ -292,20 +314,27 @@ template <typename T, int order, int centering> struct interpolator {
 #pragma omp parallel for simd
     for (int n = 0; n < np; ++n) {
       // Particle positions are always stored in CCTK_REAL (AMReX's
-      // ParticleReal); narrow explicitly to T here (a no-op for
-      // T=CCTK_REAL, double->float narrowing for T=CCTK_REAL4 groups).
-      const vect<T, dim> x{T(particles[n].rdata(0)), T(particles[n].rdata(1)),
-                           T(particles[n].rdata(2))};
+      // ParticleReal); narrow explicitly to CT here (a no-op for
+      // T=CCTK_REAL, double->float narrowing for T=CCTK_REAL4/CCTK_REAL2
+      // groups). D1 (mixed precision, CCTK_REAL2): using CT rather than T
+      // keeps `x - x0` (x0 is CCTK_REAL) a plain float/double built-in
+      // subtraction -- ambiguous only when the left operand is `__half`,
+      // which CT never is.
+      const vect<CT, dim> x{CT(particles[n].rdata(0)),
+                            CT(particles[n].rdata(1)),
+                            CT(particles[n].rdata(2))};
       // // Ensure the point is inside the domain
       // assert(all(x >= x0_allowed && x <= x1_allowed));
 
-      // Find stencil anchor (i.e. the leftmost stencil point)
+      // Find stencil anchor (i.e. the leftmost stencil point). `qi` is
+      // CCTK_REAL (the common type of CT and x0/dx's CCTK_REAL), so the
+      // arithmetic below is plain CCTK_REAL, not T.
       const auto qi = (x - x0) / dx;
       const auto lrint1 = [](auto a) {
         using std::lrint;
         return int(lrint(a));
       };
-      auto i = fmap(lrint1, qi - order / T(2));
+      auto i = fmap(lrint1, qi - order / CCTK_REAL(2));
       auto di = qi - i;
       // Consistency check
       assert(all(i >= 0 && i + order < grid.lsh));
@@ -313,11 +342,14 @@ template <typename T, int order, int centering> struct interpolator {
       // Push point away from boundaries if they are just a little outside
       for (int d = 0; d < dim; ++d) {
         if (i[d] + order / 2 < i0_allowed[d] &&
-            di[d] - order / T(2) >= +T(0.5) - eps()) {
+            di[d] - order / CCTK_REAL(2) >=
+                +CCTK_REAL(0.5) - CCTK_REAL(eps())) {
           i[d] += 1;
           di[d] -= 1;
         }
-        if (i[d] >= i1_allowed[d] && di[d] - order / T(2) <= -T(0.5) + eps()) {
+        if (i[d] >= i1_allowed[d] &&
+            di[d] - order / CCTK_REAL(2) <=
+                -CCTK_REAL(0.5) + CCTK_REAL(eps())) {
           i[d] -= 1;
           di[d] += 1;
         }

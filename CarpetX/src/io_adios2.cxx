@@ -72,7 +72,15 @@ struct carpetx_adios2_t {
   template <typename T, std::size_t D> struct box_t {
     std::array<T, D> lo, hi;
     constexpr std::array<T, D> shape() const {
-      std::array<T, D> sh;
+      // C4: nvcc's host pass (gcc 8.5, pinned via --compiler-bindir) rejects
+      // this constexpr evaluation because a default-initialized
+      // std::array<T,D> local has no user-provided default constructor and
+      // gcc 8's constexpr evaluator refuses to read from its
+      // not-yet-initialized elements before every one is written -- even
+      // though every element is unconditionally written by the loop below.
+      // Value-initialize explicitly; a no-op at runtime, and compatible with
+      // every host compiler in use (not just gcc 8).
+      std::array<T, D> sh{};
       for (std::size_t d = 0; d < D; ++d)
         sh[d] = hi[d] < lo[d] ? T{0} : hi[d] - lo[d];
       return sh;
