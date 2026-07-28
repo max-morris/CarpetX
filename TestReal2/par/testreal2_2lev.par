@@ -1,14 +1,14 @@
-# Phase 2 self-checking mixed-precision test: static mesh refinement
-# (BoxInBox) creates a second refinement level around the origin; a REAL8
-# and a REAL4 grid function, both holding a linear function of the
-# coordinates, are initialized on the coarse level and then verified on
-# ALL levels (interior and ghost zones, excluding the outer physical
-# boundary) against the analytic function. Because the function is linear
-# and CarpetX::prolongation_order = 1, double/float prolongation onto
-# (and across) the fine level must be exact up to roundoff.
+# CCTK_REAL2 (binary16) leg of the two-level regrid + prolongation test and
+# of the edge- and face-centered restriction tests that ride along on the
+# same BoxInBox regrid.
 #
-# par/testreal2_2lev.par in the sibling thorn TestReal2 is this same run with
-# the CCTK_REAL2 (binary16) layer added; keep the two in sync.
+# This is par/testreal4_2lev.par of the sibling thorn TestReal4 (which
+# carries this suite's REAL8/REAL4 layer) with TestReal2 activated
+# alongside it, so the run checks all three precisions -- exactly what the
+# single combined thorn did before the REAL2 split (CCTK_REAL2 is an
+# optional flesh type, so REAL2-incapable platforms build TestReal4 only).
+# TestReal2 shares TestReal4's run_*_test parameters, so the switches below
+# steer both thorns. Keep the two parfiles in sync.
 
 ActiveThorns = "
     BoxInBox
@@ -16,6 +16,7 @@ ActiveThorns = "
     CarpetXRegrid
     IOUtil
     TestReal4
+    TestReal2
 "
 
 Cactus::cctk_show_schedule = "no"

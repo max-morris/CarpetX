@@ -1,0 +1,44 @@
+# Parameter definitions for thorn TestReal2
+#
+# TestReal2 is steered entirely by TestReal4's parameters (shared below), so
+# a parfile that activates both thorns enables the same tests at all three
+# precisions with a single set of run_*_test switches, exactly as the single
+# combined thorn did before the REAL8/REAL4 vs. REAL2 split. The only
+# parameter owned here is the REAL2 tolerance -- which is also this thorn's
+# CCTK_REAL2 param.ccl coverage.
+
+PRIVATE:
+
+# --- Sized-REAL parameter coverage -------------------------------------
+#
+# TestReal2_Check (src/testreal2.cxx) uses this -- instead of a hardcoded
+# constexpr tolerance -- as the pass/fail threshold for the state2 periodic
+# self-test, exercising a CCTK_REAL2 param.ccl parameter end-to-end (parsed,
+# range-checked, stored, and bound via DECLARE_CCTK_PARAMETERS at its
+# declared width). TestReal4 does the same for CCTK_REAL8 and CCTK_REAL4
+# with its own check_tolerance8/check_tolerance4.
+#
+# The default and par/testreal2.par's override are both exact powers of two
+# (hence exactly representable in binary16, with no rounding introduced by
+# storing them as a CCTK_REAL2), so TestReal2_Check can also bit-exactly
+# verify the *specific* overridden value it received back from the parameter
+# database, proving the parfile-parsing path for a CCTK_REAL2 parameter
+# round-trips correctly.
+CCTK_REAL2 check_tolerance2 "Pass/fail tolerance for state2::u2 in the periodic self-test (TestReal2_Check); default and par/testreal2.par's override are both exact powers of two"
+{
+  (0:1] :: "any positive tolerance, at most 1"
+} 0.00390625
+
+SHARES: TestReal4
+
+# Which of the suite's tests to run, and the evolution test's parameters:
+# owned by TestReal4 (RESTRICTED there), used here so that both precisions'
+# layers are gated by the same switches and evolve the same ODE. A parfile
+# therefore only ever sets TestReal4::run_*_test / TestReal4::evol_*, never
+# a TestReal2 copy of them.
+USES BOOLEAN run_periodic_test
+USES BOOLEAN run_2lev_test
+USES BOOLEAN run_bc_test
+USES BOOLEAN run_evol_test
+USES CCTK_REAL evol_decay_rate
+USES CCTK_REAL evol_u0

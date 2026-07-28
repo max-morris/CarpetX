@@ -1,0 +1,7 @@
+# Main make.code.defn file for thorn TestReal2
+
+# Source files in this directory
+SRCS = testreal2.cxx testreal2_2lev.cxx testreal2_bc.cxx testreal2_evol.cxx testreal2_scalar_array.cxx testreal2_mixargs.cxx testreal2_mixargs_check.cxx
+
+# Subdirectories containing source files
+SUBDIRS =

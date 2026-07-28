@@ -1,29 +1,21 @@
-# Phase 4 self-checking mixed-precision test: I/O services. Runs the same
-# single-level periodic ghost-sync self-test as par/testreal4.par (state8/
-# state4, TestReal4_Initialize/_Check/_CheckGF3D5), plus the grid
-# scalar/grid array coverage (scalar8/scalar4, array8/array4,
-# TestReal4_ScalarArray_Initialize/_Check), but with CarpetX's I/O services
-# (norms, openPMD, Silo, TSV) and checkpointing all enabled and exercising
-# the CCTK_REAL8 and CCTK_REAL4 versions of both group kinds, to verify
-# those services are precision-generic and group-kind-generic (accept and
-# correctly handle REAL4 grid functions *and* grid scalars/arrays, not just
-# REAL8 grid functions); grid scalars/arrays have no reduction support, so
-# they are omitted from out_norm_vars below.
+# CCTK_REAL2 (binary16) leg of the I/O services + checkpointing test: REAL2
+# groups are widened to float32 on viz-format (openPMD/Silo/TSV) output, but
+# round-trip bit-exactly through the openPMD checkpoint (D6), for grid
+# functions and grid scalars/arrays alike.
 #
-# par/testreal2_io.par in the sibling thorn TestReal2 is this same run with
-# the CCTK_REAL2 (binary16) layer added -- that is where REAL2's widening to
-# float32 on viz-format output, and its bit-exact openPMD checkpoint
-# round-trip (D6), are exercised; keep the two in sync.
-#
-# This parfile itself only checkpoints (at iteration 1) and terminates; see
-# par/testreal4_io_recover.par for the matching recovery leg, which resumes
-# from the checkpoint this parfile writes and continues the same self-test
-# (including TestReal4_Check) past the checkpoint/recovery boundary.
+# This is par/testreal2_io.par of the sibling thorn TestReal4 (which
+# carries this suite's REAL8/REAL4 layer) with TestReal2 activated
+# alongside it, so the run checks all three precisions -- exactly what the
+# single combined thorn did before the REAL2 split (CCTK_REAL2 is an
+# optional flesh type, so REAL2-incapable platforms build TestReal4 only).
+# TestReal2 shares TestReal4's run_*_test parameters, so the switches below
+# steer both thorns. Keep the two parfiles in sync.
 
 ActiveThorns = "
     CarpetX
     IOUtil
     TestReal4
+    TestReal2
 "
 
 Cactus::cctk_show_schedule = "no"
@@ -84,6 +76,7 @@ CarpetX::out_metadata = no
 CarpetX::out_norm_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
 "
 CarpetX::out_norm_omit_unstable = yes
 CarpetX::out_norm_omit_sumloc_for_backward_compatibility = yes
@@ -103,20 +96,26 @@ CarpetX::openpmd_format = "ADIOS2_BP5"
 CarpetX::out_openpmd_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
     TestReal4::scalar8
     TestReal4::scalar4
+    TestReal2::scalar2
     TestReal4::array8
     TestReal4::array4
+    TestReal2::array2
 "
 
 # Silo: both test-state groups, plus the grid scalar/grid array groups.
 CarpetX::out_silo_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
     TestReal4::scalar8
     TestReal4::scalar4
+    TestReal2::scalar2
     TestReal4::array8
     TestReal4::array4
+    TestReal2::array2
 "
 
 # TSV: all three test-state groups, plus the grid scalar/grid array groups.
@@ -124,10 +123,13 @@ CarpetX::out_tsv = yes
 CarpetX::out_tsv_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
     TestReal4::scalar8
     TestReal4::scalar4
+    TestReal2::scalar2
     TestReal4::array8
     TestReal4::array4
+    TestReal2::array2
 "
 
 # --- Checkpointing -------------------------------------------------------
@@ -145,6 +147,8 @@ IO::checkpoint_on_terminate = yes
 
 # This parfile activates TestReal4's original periodic self-test only.
 TestReal4::run_periodic_test = "yes"
+# TestReal2_Check hard-verifies this exact parfile-steered CCTK_REAL2 value
+TestReal2::check_tolerance2 = 0.0078125
 TestReal4::run_2lev_test = "no"
 TestReal4::run_bc_test = "no"
 TestReal4::run_evol_test = "no"

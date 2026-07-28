@@ -4,31 +4,41 @@
 # code so that each test is fully self-contained; only which of the tests
 # in this thorn are active is steered via the parameters below.
 #
-# TestReal4 is a single thorn shared by four independent parfiles
+# TestReal4 is a single thorn shared by several independent parfiles
 # (par/testreal4.par, par/testreal4_2lev.par, par/testreal4_bc.par,
-# par/testreal4_evol.par), each exercising a different Phase of CarpetX's
-# mixed-precision support with a different grid/boundary/level setup. Since
-# a thorn's schedule.ccl is unconditional, every parfile that activates
-# TestReal4 would otherwise run *all* of these self-checks together, even
-# though (e.g.) the original single-level periodic self-test assumes
-# periodic boundaries and a single refinement level, which the other
-# parfiles' setups do not provide. These booleans, combined with `SCHEDULE
-# ... IF` clauses in schedule.ccl, let each parfile enable only the test(s)
-# it is set up for.
+# par/testreal4_evol.par, par/testreal4_io.par, ...), each exercising a
+# different Phase of CarpetX's mixed-precision support with a different
+# grid/boundary/level setup. Since a thorn's schedule.ccl is unconditional,
+# every parfile that activates TestReal4 would otherwise run *all* of these
+# self-checks together, even though (e.g.) the original single-level periodic
+# self-test assumes periodic boundaries and a single refinement level, which
+# the other parfiles' setups do not provide. The booleans below, combined
+# with `SCHEDULE ... IF` clauses in schedule.ccl, let each parfile enable
+# only the test(s) it is set up for.
+#
+# The run_*_test booleans and the evolution parameters are RESTRICTED rather
+# than private so that the sibling thorn TestReal2 -- the CCTK_REAL2 layer of
+# this same suite, split out because CCTK_REAL2 is an optional flesh type
+# (see interface.ccl) -- can SHARE them: one parfile setting then steers both
+# precisions' layers, exactly as it did when the two were a single thorn. A
+# parfile therefore always sets TestReal4::run_*_test, never a TestReal2 copy
+# of them. They stay spelled `TestReal4::<name>` in parfiles either way.
 
-BOOLEAN run_periodic_test "Run the original single-level periodic ghost-sync self-test (state8/state4, TestReal4_Initialize/_Check/_CheckGF3D5)"
+RESTRICTED:
+
+BOOLEAN run_periodic_test "Run the original single-level periodic ghost-sync self-test (state8/state4, TestReal4_Initialize/_Check/_CheckGF3D5; TestReal2_Initialize/_Check when TestReal2 is active)"
 {
 } "yes"
 
-BOOLEAN run_2lev_test "Run the two-level regrid+prolongation self-test (state8_2lev/state4_2lev)"
+BOOLEAN run_2lev_test "Run the two-level regrid+prolongation self-test (state8_2lev/state4_2lev, plus TestReal2's state2_2lev when active)"
 {
 } "no"
 
-BOOLEAN run_bc_test "Run the physical (dirichlet) boundary condition self-test (state8_bc/state4_bc)"
+BOOLEAN run_bc_test "Run the physical (dirichlet) boundary condition self-test (state8_bc/state4_bc, plus TestReal2's state2_bc when active)"
 {
 } "no"
 
-BOOLEAN run_evol_test "Run the ODESolvers evolution smoke test (state8_evol/state4_evol)"
+BOOLEAN run_evol_test "Run the ODESolvers evolution smoke test (state8_evol/state4_evol, plus TestReal2's state2_evol when active)"
 {
 } "no"
 
@@ -42,21 +52,18 @@ CCTK_REAL evol_u0 "Initial value u(t=0) for the evolution smoke test"
   *:* :: "any value"
 } 1.0
 
+PRIVATE:
+
 # --- Sized-REAL parameter coverage -------------------------------------
 #
 # TestReal4_Check (src/testreal4.cxx) uses these -- instead of hardcoded
 # per-precision constexpr tolerances -- as the pass/fail thresholds for the
-# state8/state4/state2 periodic self-test, exercising CCTK_REAL8,
-# CCTK_REAL4, and CCTK_REAL2 param.ccl parameters end-to-end (parsed,
-# range-checked, stored, and bound via DECLARE_CCTK_PARAMETERS at their
-# declared width).
-#
-# check_tolerance2's default and par/testreal4.par's override are both
-# exact powers of two (hence exactly representable in binary16, with no
-# rounding introduced by storing them as a CCTK_REAL2), so
-# TestReal4_Check can also bit-exactly verify the *specific* overridden
-# value it received back from the parameter database, proving the
-# parfile-parsing path for a CCTK_REAL2 parameter round-trips correctly.
+# state8/state4 periodic self-test, exercising CCTK_REAL8 and CCTK_REAL4
+# param.ccl parameters end-to-end (parsed, range-checked, stored, and bound
+# via DECLARE_CCTK_PARAMETERS at their declared width). TestReal2's
+# check_tolerance2 does the same for CCTK_REAL2, including the bit-exact
+# parfile round-trip check that binary16's exactly-representable powers of
+# two make possible.
 CCTK_REAL8 check_tolerance8 "Pass/fail tolerance for state8::u8 in the periodic self-test (TestReal4_Check)"
 {
   (0:1] :: "any positive tolerance, at most 1"
@@ -66,8 +73,3 @@ CCTK_REAL4 check_tolerance4 "Pass/fail tolerance for state4::u4 in the periodic 
 {
   (0:1] :: "any positive tolerance, at most 1"
 } 1.0e-6
-
-CCTK_REAL2 check_tolerance2 "Pass/fail tolerance for state2::u2 in the periodic self-test (TestReal4_Check); default and par/testreal4.par's override are both exact powers of two"
-{
-  (0:1] :: "any positive tolerance, at most 1"
-} 0.00390625

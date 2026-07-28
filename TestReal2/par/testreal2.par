@@ -1,15 +1,20 @@
-# Self-checking mixed-precision test: fill a CCTK_REAL8 and a CCTK_REAL4
-# grid function with a periodic analytic function, sync ghost zones on a
-# single unigrid level, and verify both grid functions everywhere (interior
-# and ghosts) against the analytic function.
+# CCTK_REAL2 (binary16) leg of the single-level periodic ghost-sync
+# self-test: state2 is filled with the periodic analytic function, synced,
+# and verified everywhere (interior and ghosts).
 #
-# par/testreal2.par in the sibling thorn TestReal2 is this same run with the
-# CCTK_REAL2 (binary16) layer added; keep the two in sync.
+# This is par/testreal4.par of the sibling thorn TestReal4 (which
+# carries this suite's REAL8/REAL4 layer) with TestReal2 activated
+# alongside it, so the run checks all three precisions -- exactly what the
+# single combined thorn did before the REAL2 split (CCTK_REAL2 is an
+# optional flesh type, so REAL2-incapable platforms build TestReal4 only).
+# TestReal2 shares TestReal4's run_*_test parameters, so the switches below
+# steer both thorns. Keep the two parfiles in sync.
 
 ActiveThorns = "
     CarpetX
     IOUtil
     TestReal4
+    TestReal2
 "
 
 Cactus::cctk_show_schedule = "no"
@@ -53,5 +58,11 @@ CarpetX::reflection_z = "no"
 CarpetX::reflection_upper_x = "no"
 CarpetX::reflection_upper_y = "no"
 CarpetX::reflection_upper_z = "no"
+
+# Exercise the parfile-parsing path for a CCTK_REAL2 param.ccl parameter:
+# steer check_tolerance2 away from its param.ccl default (0.00390625 =
+# 2^-8) to another exact power of two (0.0078125 = 2^-7), which
+# src/testreal2.cxx's TestReal2_Check verifies it received bit-exactly.
+TestReal2::check_tolerance2 = 0.0078125
 
 # No file output.

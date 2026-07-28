@@ -1,20 +1,19 @@
-# Phase 2 self-checking mixed-precision test: physical (dirichlet) boundary
-# conditions. A REAL8 and a REAL4 cell-centred grid function are each
-# initialized to a value different from their (per-group) dirichlet
-# constant, then synced -- which applies CarpetX's physical boundary
-# conditions -- and finally checked: every point in the outer-boundary
-# region must carry exactly the configured dirichlet value, at both
-# precisions. This exercises the templated BoundaryCondition<CCTK_REAL4>
-# code path (boundaries.cxx/boundaries_impl.hxx) alongside the existing
-# double-precision path.
+# CCTK_REAL2 (binary16) leg of the physical (dirichlet) boundary condition
+# test, exercising CarpetX's BoundaryCondition<CCTK_REAL2> code path.
 #
-# par/testreal2_bc.par in the sibling thorn TestReal2 is this same run with
-# the CCTK_REAL2 (binary16) layer added; keep the two in sync.
+# This is par/testreal4_bc.par of the sibling thorn TestReal4 (which
+# carries this suite's REAL8/REAL4 layer) with TestReal2 activated
+# alongside it, so the run checks all three precisions -- exactly what the
+# single combined thorn did before the REAL2 split (CCTK_REAL2 is an
+# optional flesh type, so REAL2-incapable platforms build TestReal4 only).
+# TestReal2 shares TestReal4's run_*_test parameters, so the switches below
+# steer both thorns. Keep the two parfiles in sync.
 
 ActiveThorns = "
     CarpetX
     IOUtil
     TestReal4
+    TestReal2
 "
 
 Cactus::cctk_show_schedule = "no"

@@ -1,20 +1,20 @@
-# Phase 2 self-checking mixed-precision test: ODESolvers evolution smoke
-# test. Two independent exponential-decay ODEs (du/dt = -decay_rate u) are
-# evolved by ODESolvers using RK4, held as a REAL8 and a REAL4 grid function
-# respectively, exercising ODESolvers::statecomp_t's per-group
-# mixed-precision support (each (state, rhs) pair keeps its own element type
-# throughout the lincomb/combine_valids kernels). Modeled on
-# TestODESolvers/test/test-rk4.par (single-cell unigrid domain, periodic so
-# that no physical boundary condition is needed for this trivial ODE).
+# CCTK_REAL2 (binary16) leg of the ODESolvers RK4 evolution smoke test,
+# exercising ODESolvers::statecomp_t with a binary16 (state, rhs) pair.
 #
-# par/testreal2_evol.par in the sibling thorn TestReal2 is this same run with
-# the CCTK_REAL2 (binary16) layer added; keep the two in sync.
+# This is par/testreal4_evol.par of the sibling thorn TestReal4 (which
+# carries this suite's REAL8/REAL4 layer) with TestReal2 activated
+# alongside it, so the run checks all three precisions -- exactly what the
+# single combined thorn did before the REAL2 split (CCTK_REAL2 is an
+# optional flesh type, so REAL2-incapable platforms build TestReal4 only).
+# TestReal2 shares TestReal4's run_*_test parameters, so the switches below
+# steer both thorns. Keep the two parfiles in sync.
 
 ActiveThorns = "
     CarpetX
     IOUtil
     ODESolvers
     TestReal4
+    TestReal2
 "
 
 Cactus::cctk_show_schedule = "no"

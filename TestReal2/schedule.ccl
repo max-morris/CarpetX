@@ -1,0 +1,258 @@
+# Schedule definitions for thorn TestReal2
+#
+# The REAL2 mirror of TestReal4's schedule.ccl: every item below is the
+# CCTK_REAL2 counterpart of a state8_*/state4_* item there, in the same bin
+# and gated behind the same (shared, TestReal4-owned) run_*_test parameter.
+# See TestReal4's schedule.ccl for the reasoning behind the shape of all of
+# this; the two points that drive it are repeated here because they are what
+# makes the unconditional items below unconditional:
+#
+#   - CarpetX does not support per-group conditional storage (STORAGE is not
+#     gate-able in this driver), so every group declared in interface.ccl
+#     always has storage in every parfile, and
+#   - therefore every group must always be *validly written* -- interior,
+#     outer boundary, and ghost zones -- as soon as it exists, or CarpetX's
+#     validity checking aborts at the first CycleTimelevels/regrid, even for
+#     groups the active parfile never meant to exercise.
+#
+# So the Initialize/Sync items are unconditional and only the verifying
+# "Check" items are gated.
+#
+# Nothing here needs to be ordered against TestReal4's items: the two thorns
+# touch disjoint groups, and each precision's checks are self-contained.
+
+STORAGE: state2
+STORAGE: state2_2lev
+STORAGE: state2_edgex
+STORAGE: state2_edgey
+STORAGE: state2_edgez
+STORAGE: state2_facex
+STORAGE: state2_facey
+STORAGE: state2_facez
+STORAGE: state2_bc
+STORAGE: state2_evol rhs2_evol
+STORAGE: scalar2 array2
+
+SCHEDULE TestReal2_Initialize AT initial
+{
+  LANG: C
+  WRITES: state2(interior)
+  SYNC: state2
+} "Initialize the REAL2 test state with a periodic analytic function"
+
+SCHEDULE TestReal2_PostRecover_ReinitRHS AT post_recover_variables
+{
+  LANG: C
+  WRITES: rhs2_evol(interior)
+} "Re-zero-fill rhs2_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal2_PostRecover_Sync syncs it, for the same reason TestReal2_Evol_Initial zero-fills it at CCTK_INITIAL"
+
+SCHEDULE TestReal2_PostRecover_Sync AT post_recover_variables AFTER TestReal2_PostRecover_ReinitRHS
+{
+  LANG: C
+  OPTIONS: global
+  SYNC: state2
+  SYNC: state2_2lev
+  SYNC: state2_edgex
+  SYNC: state2_edgey
+  SYNC: state2_edgez
+  SYNC: state2_facex
+  SYNC: state2_facey
+  SYNC: state2_facez
+  SYNC: state2_bc
+  SYNC: state2_evol rhs2_evol
+} "Re-sync every REAL2 test group's ghost zones and outer boundary after checkpoint recovery (which only restores each group's interior), for the same reason -- and covering the same unconditional set of groups -- as the postregrid/postrestrict Sync items below"
+
+if (run_periodic_test)
+{
+  SCHEDULE TestReal2_Check AT poststep
+  {
+    LANG: C
+    READS: state2(everywhere)
+  } "Check the REAL2 test state everywhere (interior and ghosts)"
+
+  SCHEDULE TestReal2_MixArgs_Check AT poststep AFTER TestReal2_Check
+  {
+    LANG: C
+  } "Call the PROVIDES/USES FUNCTION TestReal2_MixArgs alias (CCTK_REAL4 return, CCTK_REAL8/REAL4/REAL2 args) with known values and verify the result -- aliased-function sized-REAL coverage, touches no grid variables"
+}
+
+
+
+# =============================================================================
+# Phase 2: two-level (regrid + prolongation) test
+# =============================================================================
+
+SCHEDULE TestReal2_2Lev_Initialize AT initial
+{
+  LANG: C
+  WRITES: state2_2lev(interior)
+  WRITES: state2_edgex(interior)
+  WRITES: state2_edgey(interior)
+  WRITES: state2_edgez(interior)
+  WRITES: state2_facex(interior)
+  WRITES: state2_facey(interior)
+  WRITES: state2_facez(interior)
+} "Initialize the REAL2 linear test states on the coarse level (vertex-centred state2_2lev, edge-centred state2_edgex/y/z for the restriction test, interim I2, and face-centred state2_facex/y/z for the restriction test -- see interface.ccl)"
+
+SCHEDULE TestReal2_2Lev_Sync AT initial AFTER TestReal2_2Lev_Initialize
+{
+  LANG: C
+  SYNC: state2_2lev
+  SYNC: state2_edgex
+  SYNC: state2_edgey
+  SYNC: state2_edgez
+  SYNC: state2_facex
+  SYNC: state2_facey
+  SYNC: state2_facez
+} "Sync test data (single level only exists at this point)"
+
+# Unconditional (not gated behind run_2lev_test) for the reason given in
+# TestReal4's schedule.ccl: regridding creates a new fine level for *every*
+# group with storage -- which is all of them, in every parfile -- so every
+# group must be kept validly written across a regrid, not just the group(s)
+# the active parfile is testing.
+SCHEDULE TestReal2_2Lev_Sync AT postregrid
+{
+  LANG: C
+  SYNC: state2
+  SYNC: state2_2lev
+  SYNC: state2_edgex
+  SYNC: state2_edgey
+  SYNC: state2_edgez
+  SYNC: state2_facex
+  SYNC: state2_facey
+  SYNC: state2_facez
+  SYNC: state2_bc
+  SYNC: state2_evol
+} "Sync all REAL2 test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level. rhs2_evol is deliberately excluded: it is a TAGS='checkpoint=\"no\"' scratch group that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing it here would trip the sync precondition on its invalid new-level interior; it is recomputed every ODESolvers RHS evaluation and never needs to survive a regrid/restrict"
+
+SCHEDULE TestReal2_2Lev_Sync AT postrestrict
+{
+  LANG: C
+  SYNC: state2
+  SYNC: state2_2lev
+  SYNC: state2_edgex
+  SYNC: state2_edgey
+  SYNC: state2_edgez
+  SYNC: state2_facex
+  SYNC: state2_facey
+  SYNC: state2_facez
+  SYNC: state2_bc
+  SYNC: state2_evol
+} "Sync all REAL2 test groups after restriction, for the same reason as the postregrid item above (rhs2_evol excluded for the same reason)"
+
+if (run_2lev_test)
+{
+  SCHEDULE TestReal2_2Lev_Check AT analysis
+  {
+    LANG: C
+    READS: state2_2lev(everywhere)
+  } "Verify the REAL2 linear test state against the analytic function on every active refinement level, including ghost zones filled by prolongation"
+
+  # Interim: local FAB-templated edge average-down (see interface.ccl).
+  SCHEDULE TestReal2_2Lev_EdgeCheck AT analysis AFTER TestReal2_2Lev_Check
+  {
+    LANG: C
+    READS: state2_edgex(everywhere)
+    READS: state2_edgey(everywhere)
+    READS: state2_edgez(everywhere)
+  } "Verify the REAL2 edge-centered linear test states on the coarse level only, after restriction from the fine level created by BoxInBox's regrid"
+
+  # Face-centered restriction: REAL2 goes through the local, __half-clean
+  # average_down_faces_local kernel (see interface.ccl).
+  SCHEDULE TestReal2_2Lev_FaceCheck AT analysis AFTER TestReal2_2Lev_EdgeCheck
+  {
+    LANG: C
+    READS: state2_facex(everywhere)
+    READS: state2_facey(everywhere)
+    READS: state2_facez(everywhere)
+  } "Verify the REAL2 face-centered linear test states on the coarse level only, after restriction from the fine level created by BoxInBox's regrid"
+}
+
+
+
+# =============================================================================
+# Phase 2: physical (dirichlet) boundary condition test
+# =============================================================================
+
+SCHEDULE TestReal2_BC_Initialize AT initial
+{
+  LANG: C
+  WRITES: state2_bc(interior)
+  SYNC: state2_bc
+} "Initialize the REAL2 boundary-condition test state, then sync to apply the physical (dirichlet) boundary conditions"
+
+if (run_bc_test)
+{
+  SCHEDULE TestReal2_BC_Check AT poststep
+  {
+    LANG: C
+    READS: state2_bc(everywhere)
+  } "Verify that the outer-boundary (dirichlet) ghost points carry the configured dirichlet value"
+}
+
+
+
+# =============================================================================
+# Phase 2: ODESolvers evolution smoke test
+# =============================================================================
+
+SCHEDULE TestReal2_Evol_Initial AT initial
+{
+  LANG: C
+  WRITES: state2_evol(everywhere)
+  WRITES: rhs2_evol(everywhere)
+} "Initialize the REAL2 exponential-decay ODE state to u0 (and its rhs group to 0, so that storage CarpetX always grants is always validly written)"
+
+if (run_evol_test)
+{
+  SCHEDULE TestReal2_Evol_PostStep IN ODESolvers_PostStep
+  {
+    LANG: C
+    OPTIONS: global
+    SYNC: state2_evol
+  } "Synchronize the REAL2 ODE state after each ODESolvers (sub)step"
+
+  SCHEDULE TestReal2_Evol_RHS IN ODESolvers_RHS
+  {
+    LANG: C
+    READS: state2_evol(everywhere)
+    WRITES: rhs2_evol(everywhere)
+  } "Calculate RHS = -decay_rate * state in REAL2"
+
+  SCHEDULE TestReal2_Evol_Check AT poststep
+  {
+    LANG: C
+    READS: state2_evol(everywhere)
+  } "Check the evolved REAL2 state against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
+}
+
+
+
+# =============================================================================
+# Phase 4: grid scalar / grid array sized-real coverage
+# =============================================================================
+#
+# Grid scalars and grid arrays have no AMR structure, so (unlike every group
+# above) this coverage needs neither a SYNC clause nor postregrid/postrestrict
+# re-sync items -- see TestReal4's schedule.ccl for the details. Gated behind
+# run_periodic_test, so it runs (and its PASS lines print) in exactly the
+# parfiles that also run the periodic test, notably par/testreal2_io.par and
+# par/testreal2_io_recover.par.
+
+SCHEDULE TestReal2_ScalarArray_Initialize AT initial
+{
+  LANG: C
+  OPTIONS: global
+  WRITES: scalar2(everywhere) array2(everywhere)
+} "Initialize the REAL2 grid scalar and grid array test groups with known, exactly-representable-in-binary16 values"
+
+if (run_periodic_test)
+{
+  SCHEDULE TestReal2_ScalarArray_Check AT poststep
+  {
+    LANG: C
+    OPTIONS: global
+    READS: scalar2(everywhere) array2(everywhere)
+  } "Verify the REAL2 grid scalar and grid array test groups"
+}

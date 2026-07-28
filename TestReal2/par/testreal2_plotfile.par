@@ -1,22 +1,20 @@
-# Phase 4 self-checking mixed-precision test: AMReX plotfile output. Runs
-# the same single-level periodic ghost-sync self-test as par/testreal4.par
-# (state8/state4, TestReal4_Initialize/_Check/_CheckGF3D5), but with
-# CarpetX::out_plotfile_groups enabled for both state8 (REAL8) and state4
-# (REAL4), to verify that AMReX plotfile output is precision-generic
-# (interim I1: reduced-precision groups are widened to double for plotfile
-# output, see CarpetX/src/io.cxx's OutputPlotfile) -- i.e. that the plotfile
-# varlist is complete (REAL4 groups are no longer silently skipped) and
-# every group's on-disk values agree with the in-memory ones.
+# CCTK_REAL2 (binary16) leg of the AMReX plotfile output test: state2 is
+# widened to double for the plotfile (interim I1) rather than being silently
+# skipped from the varlist.
 #
-# par/testreal2_plotfile.par in the sibling thorn TestReal2 is this same run
-# with the CCTK_REAL2 (binary16) layer added; keep the two in sync. This parfile only writes the plotfile; verifying its
-# contents (e.g. with AMReX's `fcompare`/`fextract`, or by reading it back)
-# happens separately, not in this thorn.
+# This is par/testreal4_plotfile.par of the sibling thorn TestReal4 (which
+# carries this suite's REAL8/REAL4 layer) with TestReal2 activated
+# alongside it, so the run checks all three precisions -- exactly what the
+# single combined thorn did before the REAL2 split (CCTK_REAL2 is an
+# optional flesh type, so REAL2-incapable platforms build TestReal4 only).
+# TestReal2 shares TestReal4's run_*_test parameters, so the switches below
+# steer both thorns. Keep the two parfiles in sync.
 
 ActiveThorns = "
     CarpetX
     IOUtil
     TestReal4
+    TestReal2
 "
 
 Cactus::cctk_show_schedule = "no"
@@ -74,10 +72,13 @@ CarpetX::out_metadata = no
 CarpetX::out_plotfile_groups = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
 "
 
 # This parfile activates TestReal4's original periodic self-test only.
 TestReal4::run_periodic_test = "yes"
+# TestReal2_Check hard-verifies this exact parfile-steered CCTK_REAL2 value
+TestReal2::check_tolerance2 = 0.0078125
 TestReal4::run_2lev_test = "no"
 TestReal4::run_bc_test = "no"
 TestReal4::run_evol_test = "no"

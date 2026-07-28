@@ -1,30 +1,23 @@
-# Phase 4 self-checking mixed-precision test: checkpoint/recovery leg for
-# par/testreal4_io.par. Recovers the state that parfile checkpointed (via
-# openPMD) at iteration 1, then continues both of that parfile's self-tests
-# for one more iteration: the single-level periodic self-test
-# (TestReal4_Check, gated by run_periodic_test) and the grid scalar/grid
-# array self-test (TestReal4_ScalarArray_Check, gated by the same
-# run_periodic_test) -- verifying that the REAL8 and REAL4 versions of
-# *both* group kinds (grid functions u8/u4, and grid scalars/arrays
-# scalar8/scalar4, array8/array4) all continue to hold their expected values
-# after a checkpoint/recovery round trip, i.e. that CarpetX's (now
-# precision-generic and group-kind-generic) checkpoint/recovery code path
-# preserves REAL4 data correctly for grid functions and grid scalars/arrays
-# alike.
+# CCTK_REAL2 (binary16) leg of the checkpoint/recovery test: the recovery
+# companion of par/testreal2_io.par, verifying that REAL2 grid functions and
+# grid scalars/arrays come back *bit-exactly* (their raw 16-bit payload, per
+# D6, rather than the widened float32 used for viz-format output).
 #
-# par/testreal2_io_recover.par in the sibling thorn TestReal2 is this same
-# run with the CCTK_REAL2 (binary16) layer added -- that is where REAL2's
-# *bit-exact* recovery (its raw 16-bit payload, per D6) is exercised; keep
-# the two in sync (and note the two thorns' checkpoints are separate runs,
-# so recover from the matching leg's checkpoint directory).
+# This is par/testreal4_io_recover.par of the sibling thorn TestReal4 (which
+# carries this suite's REAL8/REAL4 layer) with TestReal2 activated
+# alongside it, so the run checks all three precisions -- exactly what the
+# single combined thorn did before the REAL2 split (CCTK_REAL2 is an
+# optional flesh type, so REAL2-incapable platforms build TestReal4 only).
+# TestReal2 shares TestReal4's run_*_test parameters, so the switches below
+# steer both thorns. Keep the two parfiles in sync.
 #
 # NOTE: IO::recover_dir below is a path relative to this run's own working
-# directory (.../mp/testreal4-io-recover/output-0000/, per how `cactup sim
+# directory (.../mp/testreal2-io-recover/output-0000/, per how `cactup sim
 # run` lays out simulation directories) back to the checkpoint directory
-# written by par/testreal4_io.par. It therefore only resolves correctly
+# written by par/testreal2_io.par. It therefore only resolves correctly
 # when the two parfiles are run as `cactup sim` simulations literally
-# named "testreal4-io" (for this parfile's companion) and
-# "testreal4-io-recover" (for this parfile itself) -- mirroring, for our
+# named "testreal2-io" (for this parfile's companion) and
+# "testreal2-io-recover" (for this parfile itself) -- mirroring, for our
 # sim-run-based invocation, the same recover_dir role that
 # TestOutput/test/recover-openpmd.par's (test-suite-relative) IO::recover_dir
 # plays for that thorn's checkpoint-openpmd.par/recover-openpmd.par pair.
@@ -33,6 +26,7 @@ ActiveThorns = "
     CarpetX
     IOUtil
     TestReal4
+    TestReal2
 "
 
 Cactus::cctk_show_schedule = "no"
@@ -83,6 +77,7 @@ CarpetX::out_metadata = no
 CarpetX::out_norm_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
 "
 CarpetX::out_norm_omit_unstable = yes
 CarpetX::out_norm_omit_sumloc_for_backward_compatibility = yes
@@ -91,39 +86,48 @@ CarpetX::openpmd_format = "ADIOS2_BP5"
 CarpetX::out_openpmd_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
     TestReal4::scalar8
     TestReal4::scalar4
+    TestReal2::scalar2
     TestReal4::array8
     TestReal4::array4
+    TestReal2::array2
 "
 
 CarpetX::out_silo_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
     TestReal4::scalar8
     TestReal4::scalar4
+    TestReal2::scalar2
     TestReal4::array8
     TestReal4::array4
+    TestReal2::array2
 "
 
 CarpetX::out_tsv = yes
 CarpetX::out_tsv_vars = "
     TestReal4::state8
     TestReal4::state4
+    TestReal2::state2
     TestReal4::scalar8
     TestReal4::scalar4
+    TestReal2::scalar2
     TestReal4::array8
     TestReal4::array4
+    TestReal2::array2
 "
 
 # --- Recovery -------------------------------------------------------------
 #
-# Recover from the checkpoint written by par/testreal4_io.par (see the
+# Recover from the checkpoint written by par/testreal2_io.par (see the
 # path-scoping NOTE above), then keep checkpointing so a further
 # checkpoint/recovery round trip stays possible.
 
 CarpetX::recover_method = "openpmd"
-IO::recover_dir = "../../testreal4-io/output-0000/testreal4_io/checkpoints"
+IO::recover_dir = "../../testreal2-io/output-0000/testreal2_io/checkpoints"
 IO::recover = "autoprobe"
 
 CarpetX::checkpoint_method = "openpmd"
@@ -133,6 +137,8 @@ IO::checkpoint_every = 1
 IO::checkpoint_on_terminate = yes
 
 TestReal4::run_periodic_test = "yes"
+# TestReal2_Check hard-verifies this exact parfile-steered CCTK_REAL2 value
+TestReal2::check_tolerance2 = 0.0078125
 TestReal4::run_2lev_test = "no"
 TestReal4::run_bc_test = "no"
 TestReal4::run_evol_test = "no"

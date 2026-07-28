@@ -1,11 +1,22 @@
 # Interface definition for thorn TestReal4
 #
-# Self-checking mixed-precision test: a CCTK_REAL8, a CCTK_REAL4, and a
-# CCTK_REAL2 grid function, all on the same (default) centering. All three
-# are filled with a deterministic, periodic analytic function of the
-# coordinates, synced, and then verified everywhere (interior and ghost
-# zones) to make sure single-level ghost exchange works correctly for
-# CCTK_REAL4 and CCTK_REAL2 grid functions alongside a CCTK_REAL8 one.
+# Self-checking mixed-precision test: a CCTK_REAL8 and a CCTK_REAL4 grid
+# function, both on the same (default) centering. Both are filled with a
+# deterministic, periodic analytic function of the coordinates, synced, and
+# then verified everywhere (interior and ghost zones) to make sure
+# single-level ghost exchange works correctly for CCTK_REAL4 grid functions
+# alongside a CCTK_REAL8 one.
+#
+# The CCTK_REAL2 (binary16) layer of this same suite lives in the sibling
+# thorn TestReal2, which declares the state2_*/scalar2/array2 counterparts
+# of everything below and is steered by this thorn's parameters (it SHARES
+# them). Activating both thorns runs the suite at all three precisions.
+# The split keeps TestReal4 buildable everywhere: CCTK_REAL2 is an optional
+# flesh type (HAVE_CCTK_REAL2, which configure defines only where the C
+# compiler provides _Float16 -- GCC >= 12 on x86-64), and a thorn declaring
+# CCTK_REAL2 grid variables or parameters cannot be built without it, so
+# REAL2-incapable platforms simply drop TestReal2 from their thornlist and
+# still get the whole REAL8/REAL4 suite from here.
 
 IMPLEMENTS: TestReal4
 
@@ -23,11 +34,6 @@ CCTK_REAL4 state4 TYPE=gf
 {
   u4
 } "REAL4 (float) mixed-precision test state"
-
-CCTK_REAL2 state2 TYPE=gf
-{
-  u2
-} "REAL2 (binary16) mixed-precision test state"
 
 
 
@@ -52,11 +58,6 @@ CCTK_REAL4 state4_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
   u4_2lev
 } "REAL4 linear test state for the two-level regrid+prolongation test"
 
-CCTK_REAL2 state2_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
-{
-  u2_2lev
-} "REAL2 linear test state for the two-level regrid+prolongation test"
-
 
 
 # --- Phase 2: edge-centered restriction test (interim I2) -------------------
@@ -64,10 +65,10 @@ CCTK_REAL2 state2_2lev TYPE=gf TAGS='dirichlet_values={0.0}'
 # Edge-centered (centering rank 1: cell-centered along the edge's own
 # direction, vertex-centered in the two transverse directions -- see
 # StaggeredWaveToyX::fxstate/fystate/fzstate for the same {cvv}/{vcv}/{vvc}
-# convention) counterparts of state8_2lev/state4_2lev/state2_2lev above, one
-# set of three groups per edge direction. Ridden along on the same
-# testreal4_2lev.par regrid, these exercise CarpetX::Restrict's
-# CCTK_REAL4/CCTK_REAL2 edge-centered path (schedule.cxx), which as of this
+# convention) counterparts of state8_2lev/state4_2lev above, one set of two
+# groups per edge direction. Ridden along on the same testreal4_2lev.par
+# regrid, these exercise CarpetX::Restrict's CCTK_REAL4 edge-centered path
+# (schedule.cxx), which as of this
 # writing goes through a local FAB-templated average-down kernel rather
 # than amrex::average_down_edges (see src/testreal4_2lev.cxx's
 # TestReal4_2Lev_EdgeCheck and the schedule.ccl comment above the relevant
@@ -87,11 +88,6 @@ CCTK_REAL4 state4_edgex TYPE=gf CENTERING={cvv} TAGS='dirichlet_values={0.0}'
   u4_edgex
 } "REAL4 linear test state, edge-centered along x, for the restriction test"
 
-CCTK_REAL2 state2_edgex TYPE=gf CENTERING={cvv} TAGS='dirichlet_values={0.0}'
-{
-  u2_edgex
-} "REAL2 linear test state, edge-centered along x, for the restriction test"
-
 CCTK_REAL8 state8_edgey TYPE=gf CENTERING={vcv} TAGS='dirichlet_values={0.0}'
 {
   u8_edgey
@@ -101,11 +97,6 @@ CCTK_REAL4 state4_edgey TYPE=gf CENTERING={vcv} TAGS='dirichlet_values={0.0}'
 {
   u4_edgey
 } "REAL4 linear test state, edge-centered along y, for the restriction test"
-
-CCTK_REAL2 state2_edgey TYPE=gf CENTERING={vcv} TAGS='dirichlet_values={0.0}'
-{
-  u2_edgey
-} "REAL2 linear test state, edge-centered along y, for the restriction test"
 
 CCTK_REAL8 state8_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
 {
@@ -117,11 +108,6 @@ CCTK_REAL4 state4_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
   u4_edgez
 } "REAL4 linear test state, edge-centered along z, for the restriction test"
 
-CCTK_REAL2 state2_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
-{
-  u2_edgez
-} "REAL2 linear test state, edge-centered along z, for the restriction test"
-
 
 
 # --- Phase 2: face-centered restriction test --------------------------------
@@ -131,18 +117,14 @@ CCTK_REAL2 state2_edgez TYPE=gf CENTERING={vvc} TAGS='dirichlet_values={0.0}'
 # StaggeredWaveToyX::fxstate/fystate/fzstate for the same convention, and
 # note this is the complement of the edge centerings above: {vcc}/{cvc}/
 # {ccv} rather than {cvv}/{vcv}/{vvc}) counterparts of
-# state8_2lev/state4_2lev/state2_2lev above, one set of three groups per
-# face direction. Ridden along on the same testreal4_2lev.par regrid, these
-# exercise CarpetX::Restrict's face-centered path (schedule.cxx) at all
-# three precisions: CCTK_REAL2 goes through the local, __half-clean
-# average_down_faces_local kernel (restrict_edges.hxx), because upstream
-# AMReX's own FAB-templated point kernel for faces (amrex_avgdown_faces)
-# computes a `T(1.0) / int` expression that is not __half-clean as of AMReX
-# 25.11; CCTK_REAL4/CCTK_REAL8 go through that stock, unmodified
-# amrex::average_down_faces instead, since float/double are unaffected by
-# the __half ambiguity (see src/testreal4_2lev.cxx's
-# TestReal4_2Lev_FaceCheck and the schedule.ccl comment above the relevant
-# SYNC items).
+# state8_2lev/state4_2lev above, one set of two groups per face direction.
+# Ridden along on the same testreal4_2lev.par regrid, these exercise
+# CarpetX::Restrict's face-centered path (schedule.cxx) for float and
+# double, which go through stock, unmodified amrex::average_down_faces (see
+# src/testreal4_2lev.cxx's TestReal4_2Lev_FaceCheck and the schedule.ccl
+# comment above the relevant SYNC items). TestReal2's face groups cover the
+# CCTK_REAL2 side of the same path, which needs CarpetX's local,
+# __half-clean average_down_faces_local kernel instead.
 
 CCTK_REAL8 state8_facex TYPE=gf CENTERING={vcc} TAGS='dirichlet_values={0.0}'
 {
@@ -154,11 +136,6 @@ CCTK_REAL4 state4_facex TYPE=gf CENTERING={vcc} TAGS='dirichlet_values={0.0}'
   u4_facex
 } "REAL4 linear test state, face-centered normal to x, for the restriction test"
 
-CCTK_REAL2 state2_facex TYPE=gf CENTERING={vcc} TAGS='dirichlet_values={0.0}'
-{
-  u2_facex
-} "REAL2 linear test state, face-centered normal to x, for the restriction test"
-
 CCTK_REAL8 state8_facey TYPE=gf CENTERING={cvc} TAGS='dirichlet_values={0.0}'
 {
   u8_facey
@@ -169,11 +146,6 @@ CCTK_REAL4 state4_facey TYPE=gf CENTERING={cvc} TAGS='dirichlet_values={0.0}'
   u4_facey
 } "REAL4 linear test state, face-centered normal to y, for the restriction test"
 
-CCTK_REAL2 state2_facey TYPE=gf CENTERING={cvc} TAGS='dirichlet_values={0.0}'
-{
-  u2_facey
-} "REAL2 linear test state, face-centered normal to y, for the restriction test"
-
 CCTK_REAL8 state8_facez TYPE=gf CENTERING={ccv} TAGS='dirichlet_values={0.0}'
 {
   u8_facez
@@ -183,11 +155,6 @@ CCTK_REAL4 state4_facez TYPE=gf CENTERING={ccv} TAGS='dirichlet_values={0.0}'
 {
   u4_facez
 } "REAL4 linear test state, face-centered normal to z, for the restriction test"
-
-CCTK_REAL2 state2_facez TYPE=gf CENTERING={ccv} TAGS='dirichlet_values={0.0}'
-{
-  u2_facez
-} "REAL2 linear test state, face-centered normal to z, for the restriction test"
 
 
 
@@ -206,11 +173,6 @@ CCTK_REAL4 state4_bc TYPE=gf CENTERING={CCC} TAGS='dirichlet_values={4.25}'
 {
   u4_bc
 } "REAL4 test state for verifying dirichlet physical boundary conditions"
-
-CCTK_REAL2 state2_bc TYPE=gf CENTERING={CCC} TAGS='dirichlet_values={3.5}'
-{
-  u2_bc
-} "REAL2 test state for verifying dirichlet physical boundary conditions"
 
 
 
@@ -240,44 +202,30 @@ CCTK_REAL4 rhs4_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
   r4_evol
 } "RHS of state4_evol"
 
-CCTK_REAL2 state2_evol TYPE=gf CENTERING={CCC} TAGS='rhs="TestReal4::rhs2_evol"'
-{
-  u2_evol
-} "REAL2 exponential-decay ODE state (du/dt = -decay_rate u)"
-
-CCTK_REAL2 rhs2_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
-{
-  r2_evol
-} "RHS of state2_evol"
-
 
 
 # =============================================================================
 # Phase 4: grid scalar / grid array sized-real coverage
 # =============================================================================
 #
-# CCTK_SCALAR/CCTK_ARRAY groups at all three sized-REAL precisions
-# (REAL8/REAL4/REAL2), exercising CarpetX's AnyTypeVector-backed grid
-# scalar/array storage (driver.hxx) end-to-end: allocation, poisoning,
+# CCTK_SCALAR/CCTK_ARRAY groups at the REAL8 and REAL4 sized-REAL precisions
+# (TestReal2 adds the REAL2 pair), exercising CarpetX's AnyTypeVector-backed
+# grid scalar/array storage (driver.hxx) end-to-end: allocation, poisoning,
 # validity checking, checkpoint/recovery, and I/O output (TSV/openPMD/Silo),
 # complementing the CCTK_GF coverage above. src/testreal4_scalar_array.cxx
 # initializes each group with values that are exact binary fractions (so
-# exactly representable at every precision, including CCTK_REAL2's binary16,
-# with no rounding tolerance needed) and re-verifies them bit-exactly after
-# every iteration -- including, in par/testreal4_io.par and
-# par/testreal4_io_recover.par, across a checkpoint/recovery round trip.
+# exactly representable at every precision, with no rounding tolerance
+# needed) and re-verifies them bit-exactly after every iteration --
+# including, in par/testreal4_io.par and par/testreal4_io_recover.par,
+# across a checkpoint/recovery round trip.
 
 CCTK_REAL8 scalar8 TYPE=scalar "REAL8 grid scalar test value"
 
 CCTK_REAL4 scalar4 TYPE=scalar "REAL4 grid scalar test value"
 
-CCTK_REAL2 scalar2 TYPE=scalar "REAL2 grid scalar test value"
-
 CCTK_REAL8 array8 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL8 grid array test values"
 
 CCTK_REAL4 array4 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL4 grid array test values"
-
-CCTK_REAL2 array2 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL2 grid array test values"
 
 
 
@@ -288,19 +236,21 @@ CCTK_REAL2 array2 TYPE=array DIM=1 SIZE=16 DISTRIB=constant "REAL2 grid array te
 # Exercises the aliased-function grammar/binding-generation gap this
 # workflow closes (repos/flesh/src/piraha/pegs/interface.peg's
 # ret_type/arg_type rules, and CreateFunctionBindings.pl's ParseArgument
-# allow-list): a CCTK_REAL4 return type together with mixed CCTK_REAL8,
-# CCTK_REAL4, and CCTK_REAL2 argument types on the same aliased function.
+# allow-list): a sized CCTK_REAL4 return type together with mixed sized
+# CCTK_REAL8 and CCTK_REAL4 argument types on the same aliased function.
+# TestReal2 declares the same alias one precision wider (TestReal2_MixArgs,
+# which also takes a CCTK_REAL2 argument) -- that is the variant that
+# needs CCTK_REAL2 support, so it lives there; this REAL2-free one keeps
+# the sized-REAL signature machinery covered on every platform.
 # TestReal4 both PROVIDES and USES this function (mirroring, e.g.,
 # Formaline's UniqueConfigID/UniqueBuildID/UniqueSimulationID, each of
 # which is likewise PROVIDES-and-USES'd by its own declaring thorn), so no
 # other thorn needs to be touched: src/testreal4_mixargs.cxx implements the
 # provider (TestReal4_MixArgs_Impl), and src/testreal4_mixargs_check.cxx (a
 # different translation unit) calls the alias and verifies the result.
-# C/C++ only: CCTK_REAL2 has no Fortran spelling (cctk_Types.h), so this
-# function must never be called from Fortran.
 
 CCTK_REAL4 FUNCTION TestReal4_MixArgs \
-    (CCTK_REAL8 IN a, CCTK_REAL4 IN b, CCTK_REAL2 IN c)
+    (CCTK_REAL8 IN a, CCTK_REAL4 IN b)
 
 PROVIDES FUNCTION TestReal4_MixArgs \
     WITH TestReal4_MixArgs_Impl \

@@ -1,5 +1,9 @@
 # Schedule definitions for thorn TestReal4
 #
+# The CCTK_REAL2 layer of this suite is the sibling thorn TestReal2, whose
+# schedule.ccl mirrors this one for its state2_* groups and is gated behind
+# the same (RESTRICTED, shared) run_*_test parameters declared here.
+#
 # NOTE on storage and initialization: CarpetX does not support per-group
 # conditional storage. CarpetX::GroupStorageIncrease/Decrease (the
 # CCTK_GroupStorageIncrease/Decrease overloads, schedule.cxx's
@@ -18,56 +22,54 @@
 # CycleTimelevels/regrid, even for groups the active parfile never
 # intended to exercise. So the Initialize (and any Sync needed to cover
 # ghosts/the outer boundary) schedule items below are unconditional too,
-# for all six test groups (REAL8/REAL4/REAL2), in every parfile. Only the
+# for all of this thorn's test groups (REAL8/REAL4), in every parfile. Only the
 # analysis/verification "Check" schedule items -- which assert a specific
 # test's analytic solution and would be meaningless (or invalid, e.g. wrong
 # domain/centering/boundary assumptions) under another parfile's setup --
 # stay gated behind the matching run_*_test parameter, so each parfile
 # still only checks the test(s) it is set up for.
 
-STORAGE: state8 state4 state2
-STORAGE: state8_2lev state4_2lev state2_2lev
-STORAGE: state8_edgex state4_edgex state2_edgex
-STORAGE: state8_edgey state4_edgey state2_edgey
-STORAGE: state8_edgez state4_edgez state2_edgez
-STORAGE: state8_facex state4_facex state2_facex
-STORAGE: state8_facey state4_facey state2_facey
-STORAGE: state8_facez state4_facez state2_facez
-STORAGE: state8_bc state4_bc state2_bc
-STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol state2_evol rhs2_evol
-STORAGE: scalar8 scalar4 scalar2 array8 array4 array2
+STORAGE: state8 state4
+STORAGE: state8_2lev state4_2lev
+STORAGE: state8_edgex state4_edgex
+STORAGE: state8_edgey state4_edgey
+STORAGE: state8_edgez state4_edgez
+STORAGE: state8_facex state4_facex
+STORAGE: state8_facey state4_facey
+STORAGE: state8_facez state4_facez
+STORAGE: state8_bc state4_bc
+STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol
+STORAGE: scalar8 scalar4 array8 array4
 
 SCHEDULE TestReal4_Initialize AT initial
 {
   LANG: C
   WRITES: state4(interior)
   WRITES: state8(interior)
-  WRITES: state2(interior)
-  SYNC: state4 state8 state2
-} "Initialize REAL4, REAL8, and REAL2 test states with a periodic analytic function"
+  SYNC: state4 state8
+} "Initialize the REAL4 and REAL8 test states with a periodic analytic function"
 
 SCHEDULE TestReal4_PostRecover_ReinitRHS AT post_recover_variables
 {
   LANG: C
   WRITES: rhs8_evol(interior)
   WRITES: rhs4_evol(interior)
-  WRITES: rhs2_evol(interior)
-} "Re-zero-fill rhs8_evol/rhs4_evol/rhs2_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal4_PostRecover_Sync syncs them, for the same reason TestReal4_Evol_Initial zero-fills them at CCTK_INITIAL"
+} "Re-zero-fill rhs8_evol/rhs4_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal4_PostRecover_Sync syncs them, for the same reason TestReal4_Evol_Initial zero-fills them at CCTK_INITIAL"
 
 SCHEDULE TestReal4_PostRecover_Sync AT post_recover_variables AFTER TestReal4_PostRecover_ReinitRHS
 {
   LANG: C
   OPTIONS: global
-  SYNC: state8 state4 state2
-  SYNC: state8_2lev state4_2lev state2_2lev
-  SYNC: state8_edgex state4_edgex state2_edgex
-  SYNC: state8_edgey state4_edgey state2_edgey
-  SYNC: state8_edgez state4_edgez state2_edgez
-  SYNC: state8_facex state4_facex state2_facex
-  SYNC: state8_facey state4_facey state2_facey
-  SYNC: state8_facez state4_facez state2_facez
-  SYNC: state8_bc state4_bc state2_bc
-  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol state2_evol rhs2_evol
+  SYNC: state8 state4
+  SYNC: state8_2lev state4_2lev
+  SYNC: state8_edgex state4_edgex
+  SYNC: state8_edgey state4_edgey
+  SYNC: state8_edgez state4_edgez
+  SYNC: state8_facex state4_facex
+  SYNC: state8_facey state4_facey
+  SYNC: state8_facez state4_facez
+  SYNC: state8_bc state4_bc
+  SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
 } "Re-sync every test group's ghost zones and outer boundary after checkpoint recovery (which only restores each group's interior), for the same reason -- and covering the same unconditional set of groups -- as the postregrid/postrestrict Sync items below"
 
 if (run_periodic_test)
@@ -77,8 +79,7 @@ if (run_periodic_test)
     LANG: C
     READS: state4(everywhere)
     READS: state8(everywhere)
-    READS: state2(everywhere)
-  } "Check REAL4, REAL8, and REAL2 test states everywhere (interior and ghosts), using the GF3D2 accessor family"
+  } "Check the REAL4 and REAL8 test states everywhere (interior and ghosts), using the GF3D2 accessor family"
 
   SCHEDULE TestReal4_CheckGF3D5 AT poststep AFTER TestReal4_Check
   {
@@ -89,7 +90,7 @@ if (run_periodic_test)
   SCHEDULE TestReal4_MixArgs_Check AT poststep AFTER TestReal4_CheckGF3D5
   {
     LANG: C
-  } "Call the PROVIDES/USES FUNCTION TestReal4_MixArgs alias (CCTK_REAL4 return, CCTK_REAL8/REAL4/REAL2 args) with known values and verify the result -- aliased-function sized-REAL coverage, touches no grid variables"
+  } "Call the PROVIDES/USES FUNCTION TestReal4_MixArgs alias (CCTK_REAL4 return, CCTK_REAL8/REAL4 args) with known values and verify the result -- aliased-function sized-REAL coverage, touches no grid variables"
 }
 
 
@@ -103,25 +104,24 @@ SCHEDULE TestReal4_2Lev_Initialize AT initial
   LANG: C
   WRITES: state8_2lev(interior)
   WRITES: state4_2lev(interior)
-  WRITES: state2_2lev(interior)
-  WRITES: state8_edgex(interior) state4_edgex(interior) state2_edgex(interior)
-  WRITES: state8_edgey(interior) state4_edgey(interior) state2_edgey(interior)
-  WRITES: state8_edgez(interior) state4_edgez(interior) state2_edgez(interior)
-  WRITES: state8_facex(interior) state4_facex(interior) state2_facex(interior)
-  WRITES: state8_facey(interior) state4_facey(interior) state2_facey(interior)
-  WRITES: state8_facez(interior) state4_facez(interior) state2_facez(interior)
-} "Initialize the REAL4, REAL8, and REAL2 linear test states on the coarse level (vertex-centred state*_2lev, edge-centred state*_edgex/y/z for the restriction test, interim I2, and face-centred state*_facex/y/z for the restriction test -- see interface.ccl)"
+  WRITES: state8_edgex(interior) state4_edgex(interior)
+  WRITES: state8_edgey(interior) state4_edgey(interior)
+  WRITES: state8_edgez(interior) state4_edgez(interior)
+  WRITES: state8_facex(interior) state4_facex(interior)
+  WRITES: state8_facey(interior) state4_facey(interior)
+  WRITES: state8_facez(interior) state4_facez(interior)
+} "Initialize the REAL4 and REAL8 linear test states on the coarse level (vertex-centred state*_2lev, edge-centred state*_edgex/y/z for the restriction test, interim I2, and face-centred state*_facex/y/z for the restriction test -- see interface.ccl)"
 
 SCHEDULE TestReal4_2Lev_Sync AT initial AFTER TestReal4_2Lev_Initialize
 {
   LANG: C
-  SYNC: state8_2lev state4_2lev state2_2lev
-  SYNC: state8_edgex state4_edgex state2_edgex
-  SYNC: state8_edgey state4_edgey state2_edgey
-  SYNC: state8_edgez state4_edgez state2_edgez
-  SYNC: state8_facex state4_facex state2_facex
-  SYNC: state8_facey state4_facey state2_facey
-  SYNC: state8_facez state4_facez state2_facez
+  SYNC: state8_2lev state4_2lev
+  SYNC: state8_edgex state4_edgex
+  SYNC: state8_edgey state4_edgey
+  SYNC: state8_edgez state4_edgez
+  SYNC: state8_facex state4_facex
+  SYNC: state8_facey state4_facey
+  SYNC: state8_facez state4_facez
 } "Sync test data (single level only exists at this point)"
 
 # The two postregrid/postrestrict Sync items below are unconditional
@@ -139,32 +139,32 @@ SCHEDULE TestReal4_2Lev_Sync AT initial AFTER TestReal4_2Lev_Initialize
 SCHEDULE TestReal4_2Lev_Sync AT postregrid
 {
   LANG: C
-  SYNC: state8 state4 state2
-  SYNC: state8_2lev state4_2lev state2_2lev
-  SYNC: state8_edgex state4_edgex state2_edgex
-  SYNC: state8_edgey state4_edgey state2_edgey
-  SYNC: state8_edgez state4_edgez state2_edgez
-  SYNC: state8_facex state4_facex state2_facex
-  SYNC: state8_facey state4_facey state2_facey
-  SYNC: state8_facez state4_facez state2_facez
-  SYNC: state8_bc state4_bc state2_bc
-  SYNC: state8_evol state4_evol state2_evol
-} "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written. rhs8_evol/rhs4_evol/rhs2_evol are deliberately excluded: they are TAGS='checkpoint=\"no\"' scratch groups that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing them here would trip the sync precondition on their invalid new-level interior; they are recomputed every ODESolvers RHS evaluation and never need to survive a regrid/restrict"
+  SYNC: state8 state4
+  SYNC: state8_2lev state4_2lev
+  SYNC: state8_edgex state4_edgex
+  SYNC: state8_edgey state4_edgey
+  SYNC: state8_edgez state4_edgez
+  SYNC: state8_facex state4_facex
+  SYNC: state8_facey state4_facey
+  SYNC: state8_facez state4_facez
+  SYNC: state8_bc state4_bc
+  SYNC: state8_evol state4_evol
+} "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written. rhs8_evol/rhs4_evol are deliberately excluded: they are TAGS='checkpoint=\"no\"' scratch groups that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing them here would trip the sync precondition on their invalid new-level interior; they are recomputed every ODESolvers RHS evaluation and never need to survive a regrid/restrict"
 
 SCHEDULE TestReal4_2Lev_Sync AT postrestrict
 {
   LANG: C
-  SYNC: state8 state4 state2
-  SYNC: state8_2lev state4_2lev state2_2lev
-  SYNC: state8_edgex state4_edgex state2_edgex
-  SYNC: state8_edgey state4_edgey state2_edgey
-  SYNC: state8_edgez state4_edgez state2_edgez
-  SYNC: state8_facex state4_facex state2_facex
-  SYNC: state8_facey state4_facey state2_facey
-  SYNC: state8_facez state4_facez state2_facez
-  SYNC: state8_bc state4_bc state2_bc
-  SYNC: state8_evol state4_evol state2_evol
-} "Sync all test groups after restriction, for the same reason as the postregrid item above (rhs8_evol/rhs4_evol/rhs2_evol excluded for the same reason)"
+  SYNC: state8 state4
+  SYNC: state8_2lev state4_2lev
+  SYNC: state8_edgex state4_edgex
+  SYNC: state8_edgey state4_edgey
+  SYNC: state8_edgez state4_edgez
+  SYNC: state8_facex state4_facex
+  SYNC: state8_facey state4_facey
+  SYNC: state8_facez state4_facez
+  SYNC: state8_bc state4_bc
+  SYNC: state8_evol state4_evol
+} "Sync all test groups after restriction, for the same reason as the postregrid item above (rhs8_evol/rhs4_evol excluded for the same reason)"
 
 if (run_2lev_test)
 {
@@ -173,8 +173,7 @@ if (run_2lev_test)
     LANG: C
     READS: state8_2lev(everywhere)
     READS: state4_2lev(everywhere)
-    READS: state2_2lev(everywhere)
-  } "Verify the REAL4, REAL8, and REAL2 linear test states against the analytic function on every active refinement level, including ghost zones filled by prolongation"
+  } "Verify the REAL4 and REAL8 linear test states against the analytic function on every active refinement level, including ghost zones filled by prolongation"
 
   # Interim: local FAB-templated edge average-down. Upstream goal: template
   # amrex::average_down_edges over FAB (mirroring average_down_faces); drop
@@ -183,24 +182,22 @@ if (run_2lev_test)
   SCHEDULE TestReal4_2Lev_EdgeCheck AT analysis AFTER TestReal4_2Lev_Check
   {
     LANG: C
-    READS: state8_edgex(everywhere) state4_edgex(everywhere) state2_edgex(everywhere)
-    READS: state8_edgey(everywhere) state4_edgey(everywhere) state2_edgey(everywhere)
-    READS: state8_edgez(everywhere) state4_edgez(everywhere) state2_edgez(everywhere)
-  } "Verify the REAL8, REAL4, and REAL2 edge-centered linear test states on the coarse level only, after restriction from the fine level created by BoxInBox's regrid"
+    READS: state8_edgex(everywhere) state4_edgex(everywhere)
+    READS: state8_edgey(everywhere) state4_edgey(everywhere)
+    READS: state8_edgez(everywhere) state4_edgez(everywhere)
+  } "Verify the REAL8 and REAL4 edge-centered linear test states on the coarse level only, after restriction from the fine level created by BoxInBox's regrid"
 
-  # Face-centered restriction test (see interface.ccl): CCTK_REAL2 goes
-  # through the local, __half-clean average_down_faces_local kernel
-  # (restrict_edges.hxx), because upstream AMReX's own FAB-templated point
-  # kernel for faces (amrex_avgdown_faces) is not __half-clean as of AMReX
-  # 25.11; CCTK_REAL4/CCTK_REAL8 go through the stock, unmodified
-  # amrex::average_down_faces instead.
+  # Face-centered restriction test (see interface.ccl): CCTK_REAL4/CCTK_REAL8
+  # go through stock, unmodified amrex::average_down_faces. (TestReal2's
+  # state2_facex/y/z cover the CCTK_REAL2 side of the same path, which needs
+  # CarpetX's local, __half-clean average_down_faces_local kernel instead.)
   SCHEDULE TestReal4_2Lev_FaceCheck AT analysis AFTER TestReal4_2Lev_EdgeCheck
   {
     LANG: C
-    READS: state8_facex(everywhere) state4_facex(everywhere) state2_facex(everywhere)
-    READS: state8_facey(everywhere) state4_facey(everywhere) state2_facey(everywhere)
-    READS: state8_facez(everywhere) state4_facez(everywhere) state2_facez(everywhere)
-  } "Verify the REAL8, REAL4, and REAL2 face-centered linear test states on the coarse level only, after restriction from the fine level created by BoxInBox's regrid"
+    READS: state8_facex(everywhere) state4_facex(everywhere)
+    READS: state8_facey(everywhere) state4_facey(everywhere)
+    READS: state8_facez(everywhere) state4_facez(everywhere)
+  } "Verify the REAL8 and REAL4 face-centered linear test states on the coarse level only, after restriction from the fine level created by BoxInBox's regrid"
 }
 
 
@@ -214,9 +211,8 @@ SCHEDULE TestReal4_BC_Initialize AT initial
   LANG: C
   WRITES: state8_bc(interior)
   WRITES: state4_bc(interior)
-  WRITES: state2_bc(interior)
-  SYNC: state8_bc state4_bc state2_bc
-} "Initialize the REAL4, REAL8, and REAL2 boundary-condition test states, then sync to apply the physical (dirichlet) boundary conditions"
+  SYNC: state8_bc state4_bc
+} "Initialize the REAL4 and REAL8 boundary-condition test states, then sync to apply the physical (dirichlet) boundary conditions"
 
 if (run_bc_test)
 {
@@ -225,7 +221,6 @@ if (run_bc_test)
     LANG: C
     READS: state8_bc(everywhere)
     READS: state4_bc(everywhere)
-    READS: state2_bc(everywhere)
   } "Verify that the outer-boundary (dirichlet) ghost points carry the configured dirichlet value, for all three precisions"
 }
 
@@ -240,11 +235,9 @@ SCHEDULE TestReal4_Evol_Initial AT initial
   LANG: C
   WRITES: state8_evol(everywhere)
   WRITES: state4_evol(everywhere)
-  WRITES: state2_evol(everywhere)
   WRITES: rhs8_evol(everywhere)
   WRITES: rhs4_evol(everywhere)
-  WRITES: rhs2_evol(everywhere)
-} "Initialize the REAL4, REAL8, and REAL2 exponential-decay ODE states to u0 (and their rhs groups to 0, so that storage CarpetX always grants is always validly written)"
+} "Initialize the REAL4 and REAL8 exponential-decay ODE states to u0 (and their rhs groups to 0, so that storage CarpetX always grants is always validly written)"
 
 if (run_evol_test)
 {
@@ -252,23 +245,22 @@ if (run_evol_test)
   {
     LANG: C
     OPTIONS: global
-    SYNC: state8_evol state4_evol state2_evol
+    SYNC: state8_evol state4_evol
   } "Synchronize the ODE states after each ODESolvers (sub)step"
 
   SCHEDULE TestReal4_Evol_RHS IN ODESolvers_RHS
   {
     LANG: C
-    READS: state8_evol(everywhere), state4_evol(everywhere), state2_evol(everywhere)
-    WRITES: rhs8_evol(everywhere), rhs4_evol(everywhere), rhs2_evol(everywhere)
-  } "Calculate RHS = -decay_rate * state for all three precisions"
+    READS: state8_evol(everywhere), state4_evol(everywhere)
+    WRITES: rhs8_evol(everywhere), rhs4_evol(everywhere)
+  } "Calculate RHS = -decay_rate * state for both precisions"
 
   SCHEDULE TestReal4_Evol_Check AT poststep
   {
     LANG: C
     READS: state8_evol(everywhere)
     READS: state4_evol(everywhere)
-    READS: state2_evol(everywhere)
-  } "Check the evolved REAL4, REAL8, and REAL2 states against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
+  } "Check the evolved REAL4 and REAL8 states against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
 }
 
 
@@ -296,9 +288,9 @@ SCHEDULE TestReal4_ScalarArray_Initialize AT initial
 {
   LANG: C
   OPTIONS: global
-  WRITES: scalar8(everywhere) scalar4(everywhere) scalar2(everywhere)
-  WRITES: array8(everywhere) array4(everywhere) array2(everywhere)
-} "Initialize the REAL8, REAL4, and REAL2 grid scalar and grid array test groups with known, exactly-representable-at-every-precision values"
+  WRITES: scalar8(everywhere) scalar4(everywhere)
+  WRITES: array8(everywhere) array4(everywhere)
+} "Initialize the REAL8 and REAL4 grid scalar and grid array test groups with known, exactly-representable-at-every-precision values"
 
 if (run_periodic_test)
 {
@@ -306,7 +298,7 @@ if (run_periodic_test)
   {
     LANG: C
     OPTIONS: global
-    READS: scalar8(everywhere) scalar4(everywhere) scalar2(everywhere)
-    READS: array8(everywhere) array4(everywhere) array2(everywhere)
-  } "Verify the REAL8, REAL4, and REAL2 grid scalar and grid array test groups"
+    READS: scalar8(everywhere) scalar4(everywhere)
+    READS: array8(everywhere) array4(everywhere)
+  } "Verify the REAL8 and REAL4 grid scalar and grid array test groups"
 }
