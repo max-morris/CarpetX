@@ -324,34 +324,45 @@ void poison_invalid_ga(const int gi, const int vi, const int tl) {
 template <typename T>
 static void check_valid_gf_impl(const active_levels_t &active_levels,
                                 const int gi, const int vi, const int tl,
-                                const nan_handling_t nan_handling,
                                 const std::function<std::string()> &msg) {
-  // D1/C2 (mixed precision, CCTK_REAL2): `nan_handling` used to be a
-  // function-local `constexpr` (non-odr-used in the `!=` comparison below,
-  // so no capture was required); now that it is hoisted into a named
-  // function template it is a plain runtime parameter and must be captured
-  // explicitly. Capture by value: extended __device__ lambdas cannot
-  // capture by reference.
-  const auto is_poison = [nan_handling] CCTK_DEVICE CCTK_HOST(
-                             const T val) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+  // D1/C2/D6 (mixed precision): `nan_handling` used to be a function-local
+  // `constexpr` so the `!=` comparison below folded away at compile time
+  // (the branch simply vanished for `allow_nans`, and for `forbid_nans` it
+  // became unconditional). The single caller (check_valid_gf below) always
+  // hardwires `nan_handling_t::forbid_nans` (see its own `#warning "TODO"`),
+  // so keep it a function-local constexpr here rather than a runtime
+  // parameter -- this both restores the compile-time fold and avoids an
+  // extra by-value capture in the (per-point, GPU-launched) `is_poison`
+  // lambda.
+  constexpr nan_handling_t nan_handling = nan_handling_t::forbid_nans;
+  const auto is_poison = [] CCTK_DEVICE CCTK_HOST(const T val)
+                             CCTK_ATTRIBUTE_ALWAYS_INLINE {
     poison_value_t<T> const poison_value;
     if (poison_value.is_poison(val))
       return true;
-    using std::isnan;
-    if (nan_handling != nan_handling_t::allow_nans) {
+    if constexpr (nan_handling != nan_handling_t::allow_nans) {
 #ifdef HAVE_CCTK_REAL2
-      // std::isnan has overloads for float/double/long double only;
-      // calling it with a bare CCTK_REAL2 (_Float16) is ambiguous because
-      // all three are equally-good conversion targets. Promote to float
-      // instead (exact and lossless: every binary16 value, including
-      // NaNs, is exactly representable in binary32).
+      // D6: test the IEEE-754 binary16 NaN condition directly on the
+      // integer bit pattern (exponent all-ones, mantissa nonzero) instead
+      // of promoting to float and calling isnan(float(val)): the poison
+      // check just above already does an integer compare
+      // (poison_value_t<T>::is_poison), and this mirrors it instead of
+      // additionally pulling in a widening conversion (an out-of-line
+      // libgcc call on non-F16C x86 builds) and std::isnan for every point.
+      // Every binary16 value converts to float exactly, so this is exact,
+      // not an approximation.
       if constexpr (std::is_same_v<T, CCTK_REAL2>) {
-        if (isnan(float(val)))
+        std::uint16_t bits;
+        std::memcpy(&bits, &val, sizeof bits);
+        if ((bits & 0x7fffu) > 0x7c00u)
           return true;
       } else
 #endif
-          if (isnan(val))
-        return true;
+      {
+        using std::isnan;
+        if (isnan(val))
+          return true;
+      }
     }
     return false;
   };
@@ -384,6 +395,29 @@ static void check_valid_gf_impl(const active_levels_t &active_levels,
         layout, static_cast<const T *>(CCTK_VarDataPtrI(
                     cctkGH, tl, groupdata.firstvarindex + vi)));
 
+#ifndef AMREX_USE_GPU
+    // D6: on the host, an early return plus a per-point
+    // `#pragma omp atomic write` (as the device path below still does)
+    // forces an atomic memory access (and prevents vectorization) for
+    // every single point, even though almost all of them are not poisoned
+    // and, once one poisoned point has been seen for this
+    // patch/level/component, the outcome (`*poison_found_ptr` is NaN) can
+    // no longer change. OR-accumulate into a thread-local flag captured by
+    // reference instead, and perform at most one atomic write per
+    // component, after the loop. This does not change which points are
+    // flagged or the final value of `*poison_found_ptr` (still NaN iff any
+    // point anywhere was poisoned): only the number and placement of the
+    // atomic writes.
+    bool poison_found_here = false;
+    const auto update_poison_found =
+        [=, &poison_found_here](const Loop::PointDesc &p)
+            CCTK_ATTRIBUTE_ALWAYS_INLINE {
+          poison_found_here |= is_poison(gf(p.I));
+        };
+#else
+    // On the device, a per-thread early return is already the cheapest
+    // option (no shared state to race on until the write itself, which
+    // each thread performs at most once), so this path is unchanged.
     const auto update_poison_found =
         [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
           if (CCTK_BUILTIN_EXPECT(!is_poison(gf(p.I)), true))
@@ -391,6 +425,7 @@ static void check_valid_gf_impl(const active_levels_t &active_levels,
 #pragma omp atomic write
           *poison_found_ptr = 0.0 / 0.0;
         };
+#endif
 
     if (valid.valid_all()) {
       grid.loop_device_idx<where_t::everywhere>(
@@ -406,6 +441,12 @@ static void check_valid_gf_impl(const active_levels_t &active_levels,
         grid.loop_device_idx<where_t::ghosts>(
             groupdata.indextype, groupdata.nghostzones, update_poison_found);
     }
+#ifndef AMREX_USE_GPU
+    if (poison_found_here) {
+#pragma omp atomic write
+      *poison_found_ptr = 0.0 / 0.0;
+    }
+#endif
   });
   synchronize();
 
@@ -554,7 +595,11 @@ void check_valid_gf(const active_levels_t &active_levels, const int gi,
   Interval interval(timer);
 
 #warning "TODO"
-  constexpr nan_handling_t nan_handling = nan_handling_t::forbid_nans;
+  // check_valid_gf_impl always uses nan_handling_t::forbid_nans, hardwired
+  // as a function-local constexpr there (see the comment on that function);
+  // `nan_handling1` is accepted here for interface symmetry with
+  // check_valid_ga/check_valid_scalar but is otherwise unused.
+  (void)nan_handling1;
 
   // The vartype is the same for this group on every patch/level; peek at
   // any instance to find it.
@@ -562,16 +607,13 @@ void check_valid_gf(const active_levels_t &active_levels, const int gi,
   assert(vartype_is_supported_real(vartype));
 
   if (vartype_is_real4(vartype))
-    check_valid_gf_impl<CCTK_REAL4>(active_levels, gi, vi, tl, nan_handling,
-                                    msg);
+    check_valid_gf_impl<CCTK_REAL4>(active_levels, gi, vi, tl, msg);
 #ifdef HAVE_CCTK_REAL2
   else if (vartype_is_real2(vartype))
-    check_valid_gf_impl<CCTK_REAL2>(active_levels, gi, vi, tl, nan_handling,
-                                    msg);
+    check_valid_gf_impl<CCTK_REAL2>(active_levels, gi, vi, tl, msg);
 #endif
   else
-    check_valid_gf_impl<CCTK_REAL>(active_levels, gi, vi, tl, nan_handling,
-                                   msg);
+    check_valid_gf_impl<CCTK_REAL>(active_levels, gi, vi, tl, msg);
 }
 
 // Ensure arrays are not poisoned
