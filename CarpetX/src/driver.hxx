@@ -147,6 +147,24 @@ inline bool vartype_is_supported_real(const int vartype) {
          vartype_is_real2(vartype);
 }
 
+// Compute type for a storage type T: for CCTK_REAL2 (_Float16) storage,
+// which has too little dynamic range and precision to safely accumulate
+// several values in and whose arithmetic is ambiguous when mixed with plain
+// int/double literals on some toolchains (nvcc/__half), widen to `float`;
+// for every other T, the compute type is T itself. This is the
+// "storage precision != compute precision" policy applied wherever several
+// values of a group's storage type are combined (restriction, prolongation)
+// -- widen once on load, accumulate/interpolate in the compute type, narrow
+// once on store. `prolongate_3d_rf2_impl.hxx`'s `prolongate_compute_t<T>` is
+// an alias of this (kept as a separate name there for readability at its
+// many call sites); `restrict_edges.hxx` uses this name directly.
+#ifdef HAVE_CCTK_REAL2
+template <typename T>
+using compute_t = std::conditional_t<std::is_same_v<T, CCTK_REAL2>, float, T>;
+#else
+template <typename T> using compute_t = T;
+#endif
+
 inline bool is_real4(const AnyMultiFab &mfab) {
   return std::holds_alternative<amrex::fMultiFab>(mfab);
 }

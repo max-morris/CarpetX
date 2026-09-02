@@ -8,6 +8,7 @@
 #include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
 
+#include <AMReX.H>
 #include <AMReX_FArrayBox.H>
 #include <AMReX_REAL.H>
 
@@ -18,6 +19,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <climits>
 #include <ostream>
 #include <string>
@@ -1562,7 +1565,29 @@ private:
                                     const int nvars) {
     const amrex::Box box(amrex::IntVect(0, 0, 0),
                          amrex::IntVect(layout.np - 1, 0, 0));
-    return amrex::BaseFab<T>(box, nvars, amrex::The_Async_Arena());
+    amrex::BaseFab<T> fab(box, nvars, amrex::The_Async_Arena());
+#ifdef HAVE_CCTK_REAL2
+    // amrex::BaseFab<T>::define() only signalling-NaN-poisons T=float/double
+    // (an `if constexpr` inside AMReX that excludes every other type, see
+    // AMReX_BaseFab.H). Poison CCTK_REAL2 (_Float16) tile temporaries
+    // ourselves, gated on the same amrex::InitSNaN() switch CarpetX sets
+    // from `poison_undefined_values` (driver.cxx), so GF3D5vector keeps the
+    // same "uninitialized read traps as NaN" safety net for reduced
+    // precision as it does for float/double.
+    if constexpr (std::is_same_v<T, CCTK_REAL2>) {
+      if (amrex::InitSNaN()) {
+        // Binary16 quiet-NaN poison pattern: sign=1, exponent=0x1f (all
+        // ones), mantissa=0x2ad (nonzero, top bit set for "quiet") -> 0xfead.
+        // Matches CarpetX's ipoison_t<CCTK_REAL2> in valid.hxx.
+        constexpr std::uint16_t ipoison = 0xfead;
+        CCTK_REAL2 poison;
+        static_assert(sizeof poison == sizeof ipoison);
+        std::memcpy(&poison, &ipoison, sizeof poison);
+        fab.setVal(poison);
+      }
+    }
+#endif
+    return fab;
   }
 
 public:

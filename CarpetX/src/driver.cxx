@@ -816,6 +816,11 @@ GHExt::PatchData::LevelData::LevelData(const int patch, const int level,
         flux_indextype[d] = 0;
         assert(flux_groupdata.indextype == flux_indextype);
         assert(flux_groupdata.numvars == groupdata.numvars);
+        if (!vartype_is_real8(flux_groupdata.vartype))
+          CCTK_VERROR("Flux registers require CCTK_REAL flux group %s (group "
+                      "%s has fluxes)",
+                      flux_groupdata.groupname.c_str(),
+                      groupdata.groupname.c_str());
       }
     }
   }
@@ -2074,6 +2079,16 @@ void *SetupGH(tFleshConfig *fc, int convLevel, cGH *restrict cctkGH) {
     amrex::FArrayBox::set_do_initval(true);
     amrex::FArrayBox::set_initval(
         std::numeric_limits<amrex::Real>::signaling_NaN());
+    // `fab.init_snan`/`FArrayBox::set_do_initval` only poison
+    // `amrex::FArrayBox` (i.e. `BaseFab<double>`). `amrex::BaseFab<T>` in
+    // general (in particular the `BaseFab<float>`/`BaseFab<_Float16>`
+    // storage used by REAL4/REAL2 groups, and every `Loop::GF3D5vector<T>`
+    // tile temporary, which is a plain `amrex::BaseFab<T>`) only poisons on
+    // `amrex::InitSNaN()`, which is a separate global switch. Set it too so
+    // GF3D5 tile temporaries (and hMultiFab/fMultiFab storage) keep the same
+    // "uninitialized reads as NaN" safety net as before, for all `T` that
+    // AMReX's own `if constexpr` supports (float, double).
+    amrex::SetInitSNaN(true);
   }
   // Set tile size
   pp.addarr(
