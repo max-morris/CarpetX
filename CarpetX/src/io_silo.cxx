@@ -83,6 +83,31 @@ struct db_datatype<unsigned short>
     : std::integral_constant<int, DB_SHORT> {};
 template <typename T> constexpr int db_datatype_v = db_datatype<T>::value;
 
+// Human-readable name for a Silo DB_* datatype code, for error messages
+// (e.g. a cross-precision checkpoint recovery mismatch, see InputSilo's
+// read_group below). Covers the codes db_datatype_v<T> can actually produce
+// here; anything else names its raw integer value.
+std::string db_datatype_name(const int datatype) {
+  switch (datatype) {
+  case DB_CHAR:
+    return "DB_CHAR";
+  case DB_SHORT:
+    return "DB_SHORT";
+  case DB_INT:
+    return "DB_INT";
+  case DB_LONG:
+    return "DB_LONG";
+  case DB_LONG_LONG:
+    return "DB_LONG_LONG";
+  case DB_FLOAT:
+    return "DB_FLOAT";
+  case DB_DOUBLE:
+    return "DB_DOUBLE";
+  default:
+    return "DB_<" + std::to_string(datatype) + ">";
+  }
+}
+
 // Access the box/distribution-map structure of a grid function group's
 // storage without caring whether it is backed by an amrex::MultiFab or an
 // amrex::fMultiFab (REAL4 groups): these structural properties (box layout,
@@ -473,9 +498,11 @@ void InputSiloGridStructure(cGH *restrict const cctkGH,
 void InputSilo(const cGH *restrict const cctkGH,
                const std::vector<bool> &input_group,
                const std::string &input_dir, const std::string &input_file,
-               const bool is_checkpoint) {
+               const io_mode mode) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
+
+  const bool is_checkpoint = mode == io_mode::checkpoint;
 
   assert(!input_dir.empty());
   assert(!input_file.empty());
@@ -671,7 +698,22 @@ void InputSilo(const cGH *restrict const cctkGH,
                 assert(ndims <= 3);
                 for (int d = 0; d < ndims; ++d)
                   assert(quadvar->dims[d] == dims[d]);
-                assert(quadvar->datatype == db_datatype_v<T>);
+                // D6/LOW: this used to be an assert(), which a build with
+                // -DNDEBUG (common in production ET configurations, though
+                // not this one) compiles away, silently letting the
+                // following memcpy reinterpret the file's on-disk datatype
+                // as T -- e.g. a pure-double checkpoint's 8-byte doubles
+                // read as this build's 4-byte floats. Always check.
+                if (quadvar->datatype != db_datatype_v<T>)
+                  CCTK_VERROR(
+                      "Silo variable \"%s\" (group %s) in file \"%s\" has "
+                      "datatype %s on disk, but this build expects %s. "
+                      "Silo checkpoints/data files cannot be read by a "
+                      "CarpetX build with a different CCTK_REAL2/REAL4/REAL8 "
+                      "precision for this group than the one that wrote them.",
+                      varname.c_str(), CCTK_FullGroupName(gi),
+                      input_file.c_str(), db_datatype_name(quadvar->datatype).c_str(),
+                      db_datatype_name(db_datatype_v<T>).c_str());
                 assert(quadvar->centering == centering);
                 assert(quadvar->nvals == 1);
 
@@ -745,9 +787,11 @@ void InputSilo(const cGH *restrict const cctkGH,
 void OutputSilo(const cGH *restrict const cctkGH,
                 const std::vector<bool> &output_group,
                 const std::string &output_dir, const std::string &output_file,
-                const bool is_checkpoint) {
+                const io_mode mode) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
+
+  const bool is_checkpoint = mode == io_mode::checkpoint;
 
   int ierr;
 
@@ -819,13 +863,13 @@ void OutputSilo(const cGH *restrict const cctkGH,
     auto interval_mkdir = std::make_unique<Interval>(timer_mkdir);
     const std::string subdirname = make_subdirname(output_file, cctk_iteration);
     const std::string pathname = std::string(output_dir) + "/" + subdirname;
-    const int mode = 0755;
+    const int dir_mode = 0755;
     static std::once_flag create_directory;
     call_once(create_directory, [&]() {
-      const int ierr = CCTK_CreateDirectory(mode, output_dir.c_str());
+      const int ierr = CCTK_CreateDirectory(dir_mode, output_dir.c_str());
       assert(ierr >= 0);
     });
-    ierr = CCTK_CreateDirectory(mode, pathname.c_str());
+    ierr = CCTK_CreateDirectory(dir_mode, pathname.c_str());
     assert(ierr >= 0);
     interval_mkdir = nullptr;
 
@@ -1159,6 +1203,17 @@ void OutputSilo(const cGH *restrict const cctkGH,
 #ifdef HAVE_CCTK_REAL2
             // D6: see the matching OutputOpenPMD dispatch in
             // io_openpmd.cxx.
+            //
+            // Note for anyone tempted to "fix" this the way the openPMD
+            // write side needed fixing: write_group(...) below also binds a
+            // temporary FabArray to a `const auto &mfab` parameter, but
+            // unlike openPMD's storeChunkRaw, Silo's DBPutQuadvar1 call
+            // (and the MPI_Send/MPI_Recv gathering the data to the writing
+            // rank) inside write_group is fully synchronous -- it returns
+            // only once the data has actually been written out, well
+            // before this temporary's lifetime ends at the end of this
+            // full-expression. There is no deferred-write API here, so no
+            // buffer needs to be kept alive past this call.
             const hMultiFab &real2_mfab =
                 std::get<hMultiFab>(*groupdata.mfab[tl]);
             if (is_checkpoint)

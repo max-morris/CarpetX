@@ -37,12 +37,14 @@
 // this code targets (x86-64 Linux).
 
 #include "driver.hxx"
+#include "valid.hxx"
 
 #include <cctk.h>
 
 #ifdef HAVE_CCTK_REAL2
 
 #include <AMReX_FabArray.H>
+#include <AMReX_GpuLaunch.H>
 #include <AMReX_MultiFab.H>
 
 #include <cstddef>
@@ -54,6 +56,20 @@ namespace CarpetX {
 static_assert(sizeof(unsigned short) == sizeof(CCTK_REAL2),
               "unsigned short must be exactly 16 bits wide to alias "
               "CCTK_REAL2's raw storage for checkpointing");
+
+// openPMD attribute recording how a CCTK_REAL2 grid function mesh's float32
+// record was encoded, so a reader can tell a checkpoint's raw-16-in-f32
+// "carrier" apart from a viz file's genuinely-widened float32 data -- both
+// are Datatype::FLOAT records with identical names on disk, so nothing else
+// distinguishes them (see the write/read sites in io_openpmd.cxx). A file
+// written before this attribute existed has none; that is always treated as
+// "f32_widened" (the only encoding openPMD REAL2 output ever used before the
+// checkpoint carrier trick was introduced), which keeps old viz files
+// readable without a warning.
+constexpr const char *real2_encoding_attribute_name = "carpetx_real2_encoding";
+constexpr const char *real2_encoding_raw16_in_f32_carrier =
+    "raw16_in_f32_carrier";
+constexpr const char *real2_encoding_f32_widened = "f32_widened";
 
 // Raw bit-pattern storage for a CCTK_REAL2 group's checkpoint payload.
 using rawMultiFab = amrex::FabArray<amrex::BaseFab<unsigned short> >;
@@ -67,18 +83,17 @@ template <typename Dst> Dst alloc_like_real2(const hMultiFab &src) {
 }
 
 // Widen `src`'s CCTK_REAL2 values into a same-shaped amrex::fMultiFab, for
-// output formats with no fp16 dtype.
+// output formats with no fp16 dtype. `amrex::Copy` is SFINAE'd on
+// `std::is_convertible<SrcT, DstT>` (true for `_Float16 -> float`) and runs
+// its own fused `ParallelFor` internally (device-capable on a GPU build,
+// OpenMP-parallel on host) -- this used to be a hand-written scalar loop
+// that compiled to a `__extendhfsf2`/`__truncsfhf2` libgcc call per element
+// on a build without `-mf16c` (measured ~11x slower than a lookup table);
+// `amrex::Copy` sidesteps that entirely by not doing the conversion here in
+// the first place.
 inline amrex::fMultiFab widen_real2_to_float(const hMultiFab &src) {
   amrex::fMultiFab dst = alloc_like_real2<amrex::fMultiFab>(src);
-  for (amrex::MFIter mfi(src); mfi.isValid(); ++mfi) {
-    const amrex::BaseFab<CCTK_REAL2> &sfab = src[mfi];
-    amrex::BaseFab<float> &dfab = dst[mfi];
-    const std::ptrdiff_t n = std::ptrdiff_t(sfab.box().numPts()) * src.nComp();
-    const CCTK_REAL2 *const sp = sfab.dataPtr();
-    float *const dp = dfab.dataPtr();
-    for (std::ptrdiff_t i = 0; i < n; ++i)
-      dp[i] = float(sp[i]);
-  }
+  amrex::Copy(dst, src, 0, 0, src.nComp(), src.nGrowVect());
   return dst;
 }
 
@@ -88,28 +103,46 @@ inline amrex::fMultiFab widen_real2_to_float(const hMultiFab &src) {
 // rawify_real2/derawify_real2 below instead, for a bit-exact round trip),
 // but needed for parity so that CarpetX::filereader_method can also read
 // REAL2 initial data from a file another (widening) run produced.
+//
+// Unlike widen_real2_to_float above, this direction cannot use amrex::Copy:
+// `float -> _Float16` is a narrowing conversion that GCC only allows
+// *explicitly* (verified: std::is_convertible_v<float, _Float16> is false,
+// while the widening std::is_convertible_v<_Float16, float> is true), so
+// amrex::Copy's is_convertible SFINAE rejects it. Do the conversion (an
+// explicit cast, so it still compiles to a real `__truncsfhf2`-style
+// rounding, not a bit-pun) in a flat, parallel, device-capable
+// amrex::ParallelFor per fab instead of the previous single-threaded loop.
 inline void narrow_float_to_real2(const amrex::fMultiFab &src,
                                    hMultiFab &dst) {
   for (amrex::MFIter mfi(dst); mfi.isValid(); ++mfi) {
     const amrex::BaseFab<float> &sfab = src[mfi];
     amrex::BaseFab<CCTK_REAL2> &dfab = dst[mfi];
-    const std::ptrdiff_t n = std::ptrdiff_t(dfab.box().numPts()) * dst.nComp();
+    const amrex::Long n = amrex::Long(dfab.box().numPts()) * dst.nComp();
     const float *const sp = sfab.dataPtr();
     CCTK_REAL2 *const dp = dfab.dataPtr();
-    for (std::ptrdiff_t i = 0; i < n; ++i)
+    amrex::ParallelFor(n, [=] CCTK_DEVICE(amrex::Long i) noexcept {
       dp[i] = CCTK_REAL2(sp[i]);
+    });
   }
 }
 
 // Reinterpret `src`'s CCTK_REAL2 values as their raw 16-bit storage, for
-// checkpointing (D6: checkpoints must round-trip bit-exactly).
+// checkpointing (D6: checkpoints must round-trip bit-exactly). This is a
+// bit-pun, not a numeric conversion, so it stays hand-written (amrex::Copy
+// would try to convert, not alias); it is parallelised with a flat
+// `amrex::ParallelFor` per fab (device-capable; a 2-byte `std::memcpy` is
+// fine on-device -- it inlines to a plain load/store, not a libc call).
 inline rawMultiFab rawify_real2(const hMultiFab &src) {
   rawMultiFab dst = alloc_like_real2<rawMultiFab>(src);
   for (amrex::MFIter mfi(src); mfi.isValid(); ++mfi) {
     const amrex::BaseFab<CCTK_REAL2> &sfab = src[mfi];
     amrex::BaseFab<unsigned short> &dfab = dst[mfi];
-    const std::ptrdiff_t n = std::ptrdiff_t(sfab.box().numPts()) * src.nComp();
-    std::memcpy(dfab.dataPtr(), sfab.dataPtr(), n * sizeof(CCTK_REAL2));
+    const amrex::Long n = amrex::Long(sfab.box().numPts()) * src.nComp();
+    const CCTK_REAL2 *const sp = sfab.dataPtr();
+    unsigned short *const dp = dfab.dataPtr();
+    amrex::ParallelFor(n, [=] CCTK_DEVICE(amrex::Long i) noexcept {
+      std::memcpy(&dp[i], &sp[i], sizeof(unsigned short));
+    });
   }
   return dst;
 }
@@ -120,8 +153,12 @@ inline void derawify_real2(const rawMultiFab &src, hMultiFab &dst) {
   for (amrex::MFIter mfi(dst); mfi.isValid(); ++mfi) {
     const amrex::BaseFab<unsigned short> &sfab = src[mfi];
     amrex::BaseFab<CCTK_REAL2> &dfab = dst[mfi];
-    const std::ptrdiff_t n = std::ptrdiff_t(dfab.box().numPts()) * dst.nComp();
-    std::memcpy(dfab.dataPtr(), sfab.dataPtr(), n * sizeof(CCTK_REAL2));
+    const amrex::Long n = amrex::Long(dfab.box().numPts()) * dst.nComp();
+    const unsigned short *const sp = sfab.dataPtr();
+    CCTK_REAL2 *const dp = dfab.dataPtr();
+    amrex::ParallelFor(n, [=] CCTK_DEVICE(amrex::Long i) noexcept {
+      std::memcpy(&dp[i], &sp[i], sizeof(CCTK_REAL2));
+    });
   }
 }
 
@@ -159,13 +196,13 @@ inline amrex::fMultiFab widen_raw16_to_carrier(const rawMultiFab &src) {
   for (amrex::MFIter mfi(src); mfi.isValid(); ++mfi) {
     const amrex::BaseFab<unsigned short> &sfab = src[mfi];
     amrex::BaseFab<float> &dfab = dst[mfi];
-    const std::ptrdiff_t n = std::ptrdiff_t(sfab.box().numPts()) * src.nComp();
+    const amrex::Long n = amrex::Long(sfab.box().numPts()) * src.nComp();
     const unsigned short *const sp = sfab.dataPtr();
     float *const dp = dfab.dataPtr();
-    for (std::ptrdiff_t i = 0; i < n; ++i) {
+    amrex::ParallelFor(n, [=] CCTK_DEVICE(amrex::Long i) noexcept {
       const std::uint32_t word = sp[i]; // zero-extend, no conversion
       std::memcpy(&dp[i], &word, sizeof dp[i]);
-    }
+    });
   }
   return dst;
 }
@@ -176,16 +213,47 @@ inline rawMultiFab narrow_carrier_to_raw16(const amrex::fMultiFab &src) {
   for (amrex::MFIter mfi(src); mfi.isValid(); ++mfi) {
     const amrex::BaseFab<float> &sfab = src[mfi];
     amrex::BaseFab<unsigned short> &dfab = dst[mfi];
-    const std::ptrdiff_t n = std::ptrdiff_t(sfab.box().numPts()) * src.nComp();
+    const amrex::Long n = amrex::Long(sfab.box().numPts()) * src.nComp();
     const float *const sp = sfab.dataPtr();
     unsigned short *const dp = dfab.dataPtr();
-    for (std::ptrdiff_t i = 0; i < n; ++i) {
+    amrex::ParallelFor(n, [=] CCTK_DEVICE(amrex::Long i) noexcept {
       std::uint32_t word;
       std::memcpy(&word, &sp[i], sizeof word);
       dp[i] = static_cast<unsigned short>(word & 0xffffu);
-    }
+    });
   }
   return dst;
+}
+
+// The REAL2 poison pattern (`ipoison_t<CCTK_REAL2>` in valid.hxx, a quiet
+// NaN), reinterpreted the same way a genuine REAL2 poison value would be by
+// widen_raw16_to_carrier above: zero-extended into the low 16 bits of a
+// 32-bit word and bit-punned into a float32. Used to pre-fill a checkpoint
+// carrier buffer's not-yet-read (ghost/exterior) points before a read, so
+// that the subsequent whole-fab narrow_carrier_to_raw16/derawify_real2 copy
+// (openPMD only fills the interior) propagates a recognisable poison
+// pattern instead of the arena's leftover bits.
+inline float real2_poison_as_carrier() {
+  CCTK_REAL2 poisoned;
+  poison_value_t<CCTK_REAL2>().set_to_poison(poisoned);
+  unsigned short raw;
+  std::memcpy(&raw, &poisoned, sizeof raw);
+  const std::uint32_t word = raw; // zero-extend, no conversion
+  float carrier;
+  std::memcpy(&carrier, &word, sizeof carrier);
+  return carrier;
+}
+
+// The REAL2 poison pattern, widened (a real numeric conversion, not a
+// bit-pun) to float32. Since the poison pattern is a quiet NaN, any NaN
+// survives narrow(widen(x)) as some NaN, so this (unlike the carrier
+// version above) need not be bit-exact. Used the same way as
+// real2_poison_as_carrier(), but for a viz-mode "widened" read buffer
+// (narrow_float_to_real2 below, not the raw carrier path).
+inline float real2_poison_as_float() {
+  CCTK_REAL2 poisoned;
+  poison_value_t<CCTK_REAL2>().set_to_poison(poisoned);
+  return float(poisoned);
 }
 
 // Flat-buffer analogues of widen_real2_to_float/narrow_float_to_real2 above,

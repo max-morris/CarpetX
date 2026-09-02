@@ -425,12 +425,12 @@ struct carpetx_openpmd_t {
   void InputOpenPMD(const cGH *const cctkGH,
                     const std::vector<bool> &input_group,
                     const std::string &input_dir,
-                    const std::string &input_file, bool is_checkpoint);
+                    const std::string &input_file, io_mode mode);
 
   void OutputOpenPMD(const cGH *const cctkGH,
                      const std::vector<bool> &output_group,
                      const std::string &output_dir,
-                     const std::string &output_file, bool is_checkpoint);
+                     const std::string &output_file, io_mode mode);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -453,21 +453,21 @@ void InputOpenPMDGridStructure(cGH *cctkGH, const std::string &input_dir,
 }
 void InputOpenPMD(const cGH *cctkGH, const std::vector<bool> &input_group,
                   const std::string &input_dir, const std::string &input_file,
-                  const bool is_checkpoint) {
+                  const io_mode mode) {
   if (!carpetx_openpmd_t::self)
     carpetx_openpmd_t::self = std::make_optional<carpetx_openpmd_t>();
   carpetx_openpmd_t::self->InputOpenPMD(cctkGH, input_group, input_dir,
-                                        input_file, is_checkpoint);
+                                        input_file, mode);
 }
 
 void OutputOpenPMD(const cGH *const cctkGH,
                    const std::vector<bool> &output_group,
                    const std::string &output_dir,
-                   const std::string &output_file, const bool is_checkpoint) {
+                   const std::string &output_file, const io_mode mode) {
   if (!carpetx_openpmd_t::self)
     carpetx_openpmd_t::self = std::make_optional<carpetx_openpmd_t>();
   carpetx_openpmd_t::self->OutputOpenPMD(cctkGH, output_group, output_dir,
-                                         output_file, is_checkpoint);
+                                         output_file, mode);
 }
 
 void ShutdownOpenPMD() { carpetx_openpmd_t::self.reset(); }
@@ -682,9 +682,11 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                                      const std::vector<bool> &input_group,
                                      const std::string &input_dir,
                                      const std::string &input_file,
-                                     const bool is_checkpoint) {
+                                     const io_mode mode) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
+
+  const bool is_checkpoint = mode == io_mode::checkpoint;
 
   // Set up timers
   static Timer timer("InputOpenPMD");
@@ -916,6 +918,34 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
           // TODO: The openPMD standard says to add an attribute
           // `refinementRatio`, which is a vector of integers
 
+          // D6/HIGH: a REAL2 mesh is a Datatype::FLOAT record in *both*
+          // modes (a checkpoint's raw16-in-f32 "carrier" and a viz file's
+          // genuinely-widened float32 both determineDatatype<float>()), so
+          // nothing about the record itself distinguishes them -- reading
+          // one as the other silently produces zeros/garbage (see
+          // real2_encoding_attribute_name's comment in io_real2.hxx).
+          // Check the encoding attribute explicitly instead.
+          if (vartype_is_real2(cgroup.vartype)) {
+            std::string encoding = real2_encoding_f32_widened;
+            if (mesh.containsAttribute(real2_encoding_attribute_name))
+              encoding = mesh.getAttribute(real2_encoding_attribute_name)
+                             .get<std::string>();
+            const std::string expected = is_checkpoint
+                                             ? real2_encoding_raw16_in_f32_carrier
+                                             : real2_encoding_f32_widened;
+            if (encoding != expected)
+              CCTK_VERROR(
+                  "openPMD mesh \"%s\" (group %s) in file \"%s\" was written "
+                  "with CCTK_REAL2 encoding \"%s\", but is being read in "
+                  "%s mode (expected \"%s\"). A CCTK_REAL2 checkpoint must "
+                  "be read via CarpetX::recover_method, not "
+                  "CarpetX::filereader_method or a plain openPMD viz read, "
+                  "and vice versa.",
+                  meshname.c_str(), CCTK_FullGroupName(gi), input_file.c_str(),
+                  encoding.c_str(), is_checkpoint ? "checkpoint" : "viz",
+                  expected.c_str());
+          }
+
           // Define tensor components
 
           // TODO: Set component names according to the tensor type
@@ -1083,9 +1113,22 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
             // The buffer is kept alive by moving it into that task's
             // closure (via shared_ptr, for std::function's copyability).
             hMultiFab &real2_mfab = std::get<hMultiFab>(*groupdata.mfab[tl]);
+            // D6/MEDIUM: openPMD only fills the interior of this buffer
+            // (input_ghosts is constexpr false, see `box` above), but the
+            // narrow/derawify conversion queued below copies the *whole*
+            // fab -- including ghost/exterior points -- into real2_mfab.
+            // alloc_like_real2's contents are otherwise unspecified (freshly
+            // arena'd memory), so pre-fill those not-actually-read points
+            // with a recognisable pattern: the REAL2 poison value when
+            // CarpetX::poison_undefined_values is set (matching what every
+            // other freshly allocated CCTK_REAL2 group would already carry
+            // there), else zero. setVal runs on the fab's own arena/device,
+            // so this works for a GPU build too.
             if (is_checkpoint) {
               auto carrier = std::make_shared<amrex::fMultiFab>(
                   alloc_like_real2<amrex::fMultiFab>(real2_mfab));
+              carrier->setVal(poison_undefined_values ? real2_poison_as_carrier()
+                                                      : 0.0f);
               read_group(*carrier);
               tasks.emplace_back([carrier, &real2_mfab]() {
                 const rawMultiFab raw = narrow_carrier_to_raw16(*carrier);
@@ -1094,6 +1137,8 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
             } else {
               auto widened = std::make_shared<amrex::fMultiFab>(
                   alloc_like_real2<amrex::fMultiFab>(real2_mfab));
+              widened->setVal(poison_undefined_values ? real2_poison_as_float()
+                                                      : 0.0f);
               read_group(*widened);
               tasks.emplace_back([widened, &real2_mfab]() {
                 narrow_float_to_real2(*widened, real2_mfab);
@@ -1160,6 +1205,35 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
         const openPMD::Mesh &mesh = read_iter->meshes.at(meshname);
         // TODO: The openPMD standard says to add an attribute
         // `refinementRatio`, which is a vector of integers
+
+        // D6: unlike the grid function mesh, a REAL2 grid scalar/array's
+        // openPMD Datatype itself already differs by mode (USHORT for a
+        // checkpoint vs. FLOAT for viz), so the actual per-component read
+        // below (loadChunkRaw<unsigned short> vs. loadChunk<float>) already
+        // fails loudly with openPMD's own "Type conversion during chunk
+        // loading not yet implemented!" on a mode mismatch. Check the
+        // attribute here too, for a clearer error before that point and
+        // for consistency with the grid function mesh check above.
+        if (vartype_is_real2(cgroup.vartype)) {
+          std::string encoding = real2_encoding_f32_widened;
+          if (mesh.containsAttribute(real2_encoding_attribute_name))
+            encoding = mesh.getAttribute(real2_encoding_attribute_name)
+                           .get<std::string>();
+          const std::string expected = is_checkpoint
+                                           ? real2_encoding_raw16_in_f32_carrier
+                                           : real2_encoding_f32_widened;
+          if (encoding != expected)
+            CCTK_VERROR(
+                "openPMD mesh \"%s\" (group %s) in file \"%s\" was written "
+                "with CCTK_REAL2 encoding \"%s\", but is being read in %s "
+                "mode (expected \"%s\"). A CCTK_REAL2 checkpoint must be "
+                "read via CarpetX::recover_method, not "
+                "CarpetX::filereader_method or a plain openPMD viz read, "
+                "and vice versa.",
+                meshname.c_str(), CCTK_FullGroupName(gi), input_file.c_str(),
+                encoding.c_str(), is_checkpoint ? "checkpoint" : "viz",
+                expected.c_str());
+        }
 
         // Define tensor components
 
@@ -1476,9 +1550,11 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                                       const std::vector<bool> &output_group,
                                       const std::string &output_dir,
                                       const std::string &output_file,
-                                      const bool is_checkpoint) {
+                                      const io_mode mode) {
   DECLARE_CCTK_ARGUMENTS;
   DECLARE_CCTK_PARAMETERS;
+
+  const bool is_checkpoint = mode == io_mode::checkpoint;
 
   // Set up timers
   static Timer timer("OutputOpenPMD");
@@ -1496,10 +1572,10 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
 
     if (io_verbose)
       CCTK_VINFO("Creating openPMD object...");
-    const int mode = 0755;
+    const int dir_mode = 0755;
     static std::once_flag create_directory;
     call_once(create_directory, [&]() {
-      const int ierr = CCTK_CreateDirectory(mode, output_dir.c_str());
+      const int ierr = CCTK_CreateDirectory(dir_mode, output_dir.c_str());
       assert(ierr >= 0);
     });
     std::ostringstream buf;
@@ -1626,6 +1702,20 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
 
   // First write grid functions in a loop over patches and levels
 
+  // D6/HIGH: a REAL2 group's widened/carrier fMultiFab (built below by
+  // widen_real2_to_float/widen_raw16_to_carrier) is a temporary passed
+  // straight to write_group, which -- for the ghostless/non-ghosted branch
+  // -- hands openPMD a raw pointer into it via storeChunkRaw. That is a
+  // *deferred* write: openPMD::RecordComponent::storeChunkRaw requires the
+  // buffer to outlive the next series->flush() (see the openPMD-api header
+  // comment on that call), which for this function happens once, after
+  // every patch/level/group has been queued below -- long after the
+  // temporary bound to write_group's `const auto &mfab` parameter would
+  // otherwise have been destroyed at the end of its full-expression. Keep
+  // every such temporary alive here, across the whole loop, and only drop
+  // them once flush() has actually run.
+  std::vector<std::shared_ptr<amrex::fMultiFab> > real2_write_keepalive;
+
   // Loop over patches
   for (const auto &patchdata : ghext->patchdata) {
     // Loop over levels
@@ -1727,6 +1817,17 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
             CCTK_VINFO("Defining mesh %s...", meshname.c_str());
           assert(!write_iter.meshes.contains(meshname));
           openPMD::Mesh mesh = write_iter.meshes[meshname];
+
+          // D6/HIGH: record which CCTK_REAL2 encoding this mesh holds --
+          // both the checkpoint carrier and the viz-widened data are plain
+          // Datatype::FLOAT records with the same name, so this attribute
+          // is the only on-disk way to tell them apart on read (see
+          // real2_encoding_attribute_name's comment in io_real2.hxx).
+          if (vartype_is_real2(cgroup.vartype))
+            mesh.setAttribute(real2_encoding_attribute_name,
+                              is_checkpoint
+                                  ? real2_encoding_raw16_in_f32_carrier
+                                  : real2_encoding_f32_widened);
 
           mesh.setGeometry(openPMD::Mesh::Geometry::cartesian);
           mesh.setAxisLabels(reversed(std::vector<std::string>{"x", "y", "z"}));
@@ -1891,10 +1992,15 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
             // path used for CCTK_REAL4 groups.
             const hMultiFab &real2_mfab =
                 std::get<hMultiFab>(*groupdata.mfab[tl]);
-            if (is_checkpoint)
-              write_group(widen_raw16_to_carrier(rawify_real2(real2_mfab)));
-            else
-              write_group(widen_real2_to_float(real2_mfab));
+            // D6/HIGH: keep the widened/carrier buffer alive past
+            // series->flush() (see real2_write_keepalive's comment above)
+            // -- write_group's ghostless/non-ghosted branch hands openPMD a
+            // raw pointer into it for a deferred storeChunkRaw.
+            const auto real2_buf = std::make_shared<amrex::fMultiFab>(
+                is_checkpoint ? widen_raw16_to_carrier(rawify_real2(real2_mfab))
+                              : widen_real2_to_float(real2_mfab));
+            real2_write_keepalive.push_back(real2_buf);
+            write_group(*real2_buf);
 #else
             assert(0 && "unreachable: vartype_is_real2 is always false "
                         "without HAVE_CCTK_REAL2");
@@ -1972,6 +2078,21 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
 
         const std::string meshname = make_meshname(gi, -1, -1);
         openPMD::Mesh mesh = write_iter.meshes[meshname];
+
+        // Unlike the grid function mesh above, a REAL2 grid scalar/array's
+        // openPMD *Datatype itself* already differs by mode (USHORT for a
+        // checkpoint's raw bits vs. FLOAT for viz-widened data, see the
+        // `datatype` lambda above), so a mode mismatch on read already
+        // fails loudly with openPMD's own "Type conversion during chunk
+        // loading not yet implemented!" std::runtime_error (RecordComponent
+        // ::isSameFloatingPoint), unlike the GF mesh's ambiguous
+        // both-modes-are-FLOAT case. The attribute is set anyway, for
+        // uniformity with the GF mesh and in case that dtype distinction
+        // is ever unified away.
+        if (vartype_is_real2(cgroup.vartype))
+          mesh.setAttribute(real2_encoding_attribute_name,
+                            is_checkpoint ? real2_encoding_raw16_in_f32_carrier
+                                          : real2_encoding_f32_widened);
 
         // mesh.setGeometry(openPMD::Mesh::Geometry::cartesian);
         // mesh.setAxisLabels(reversed(std::vector<std::string>{"x", "y",
@@ -2178,6 +2299,10 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
   if (io_verbose)
     CCTK_VINFO("OutputOpenPMD: Performing all writes...");
   series->flush();
+
+  // Every deferred storeChunkRaw queued above has now actually run; the
+  // REAL2 widened/carrier buffers kept alive for it may finally be freed.
+  real2_write_keepalive.clear();
 
   if (io_verbose)
     CCTK_VINFO("OutputOpenPMD: Closing iteration...");

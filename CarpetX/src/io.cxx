@@ -209,11 +209,11 @@ void RecoverGH(const cGH *restrict cctkGH) {
   if (CCTK_EQUALS(recover_method, "openpmd")) {
 
 #ifdef HAVE_CAPABILITY_openPMD_api
-    // is_checkpoint=true: this is checkpoint recovery (see D6 -- CCTK_REAL2
-    // groups round-trip via their raw 16-bit payload here, not widened
-    // float32).
+    // io_mode::checkpoint: this is checkpoint recovery (see D6 --
+    // CCTK_REAL2 groups round-trip via their raw 16-bit payload here, not
+    // widened float32).
     InputOpenPMD(cctkGH, group_enabled, recover_dir, recover_file,
-                 /*is_checkpoint=*/true);
+                 io_mode::checkpoint);
 #else
     CCTK_VERROR(
         "CarpetX::recover_method is set to \"openpmd\", but openPMD_api "
@@ -223,9 +223,9 @@ void RecoverGH(const cGH *restrict cctkGH) {
   } else if (CCTK_EQUALS(recover_method, "silo")) {
 
 #ifdef HAVE_CAPABILITY_Silo
-    // is_checkpoint=true: see the InputOpenPMD call above.
+    // io_mode::checkpoint: see the InputOpenPMD call above.
     InputSilo(cctkGH, group_enabled, recover_dir, recover_file,
-              /*is_checkpoint=*/true);
+              io_mode::checkpoint);
 #else
     CCTK_VERROR("CarpetX::recover_method is set to \"silo\", but Silo "
                 "is not enabled");
@@ -263,7 +263,8 @@ void InputGH(const cGH *restrict cctkGH) {
     const std::vector<bool> input_group =
         find_groups("openPMD", filereader_ID_vars);
     const std::string simulation_name = get_simulation_name();
-    InputOpenPMD(cctkGH, input_group, filereader_ID_dir, filereader_ID_files);
+    InputOpenPMD(cctkGH, input_group, filereader_ID_dir, filereader_ID_files,
+                 io_mode::viz);
 #else
     // TODO: Check this at paramcheck
     CCTK_VERROR(
@@ -280,7 +281,8 @@ void InputGH(const cGH *restrict cctkGH) {
     // set, but Silo is not available
     // TODO: handle multiple file names in `filereader_ID_files`
     const std::string simulation_name = get_simulation_name();
-    InputSilo(cctkGH, input_group, filereader_ID_dir, filereader_ID_files);
+    InputSilo(cctkGH, input_group, filereader_ID_dir, filereader_ID_files,
+              io_mode::viz);
 #else
     // TODO: Check this at paramcheck
     CCTK_VERROR("CarpetX::filereader_method is set to \"silo\", but Silo is "
@@ -586,7 +588,8 @@ int OutputGH(const cGH *restrict cctkGH) {
       // TODO: Stop at paramcheck time when openPMD output parameters
       // are set, but openPMD is not available
       const std::string simulation_name = get_simulation_name();
-      OutputOpenPMD(cctkGH, group_enabled, out_dir, simulation_name);
+      OutputOpenPMD(cctkGH, group_enabled, out_dir, simulation_name,
+                    io_mode::viz);
 #else
       if (strlen(out_openpmd_vars) != 0)
         CCTK_VERROR("openPMD is not enabled. The parameter "
@@ -610,7 +613,8 @@ int OutputGH(const cGH *restrict cctkGH) {
       // TODO: Stop at paramcheck time when Silo output parameters are
       // set, but Silo is not available
       const std::string simulation_name = get_simulation_name();
-      OutputSilo(cctkGH, group_enabled, out_dir, simulation_name);
+      OutputSilo(cctkGH, group_enabled, out_dir, simulation_name,
+                 io_mode::viz);
 #else
       if (strlen(out_silo_vars) != 0)
         CCTK_VERROR("Silo is not enabled. The parameter "
@@ -685,9 +689,9 @@ void Checkpoint(const cGH *const restrict cctkGH) {
       }
       return enabled;
     }();
-    // is_checkpoint=true: see the InputOpenPMD call in RecoverGH above.
+    // io_mode::checkpoint: see the InputOpenPMD call in RecoverGH above.
     OutputOpenPMD(cctkGH, checkpoint_group, checkpoint_dir, checkpoint_file,
-                 /*is_checkpoint=*/true);
+                 io_mode::checkpoint);
 #else
     // TODO: Check this at paramcheck
     CCTK_VERROR(
@@ -718,9 +722,9 @@ void Checkpoint(const cGH *const restrict cctkGH) {
       }
       return enabled;
     }();
-    // is_checkpoint=true: see the InputSilo call in RecoverGH above.
+    // io_mode::checkpoint: see the InputSilo call in RecoverGH above.
     OutputSilo(cctkGH, checkpoint_group, checkpoint_dir, checkpoint_file,
-              /*is_checkpoint=*/true);
+              io_mode::checkpoint);
 #else
     // TODO: Check this at paramcheck
     CCTK_VERROR("CarpetX::checkpoint_method is set to \"silo\", but Silo is "

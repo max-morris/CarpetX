@@ -372,11 +372,21 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                 // supports "openpmd"/"silo"), so CCTK_REAL2 groups are
                 // always widened to float32 here. Only the box
                 // layout/component count/ghost width matter for defining
-                // variable metadata (not the actual values), but reusing
-                // widen_real2_to_float keeps this in sync with the
-                // write_group dispatch below and avoids a second helper.
-                define_group(widen_real2_to_float(
-                    std::get<hMultiFab>(*groupdata.mfab[tl])));
+                // variable metadata (not the actual values) -- define_group
+                // only calls mfab.local_size()/IndexArray(), both purely
+                // structural (BoxArray + DistributionMapping), so build an
+                // *unallocated* (MFInfo().SetAlloc(false), no data, no
+                // conversion pass) float-shaped FabArray sharing the REAL2
+                // group's box layout, instead of paying for a full
+                // widen_real2_to_float conversion (and its temporary's
+                // memory) just to name a type and read a size.
+                const hMultiFab &real2_mfab =
+                    std::get<hMultiFab>(*groupdata.mfab[tl]);
+                const amrex::fMultiFab real2_shape(
+                    real2_mfab.boxArray(), real2_mfab.DistributionMap(),
+                    real2_mfab.nComp(), real2_mfab.nGrowVect(),
+                    amrex::MFInfo().SetAlloc(false));
+                define_group(real2_shape);
 #else
                 assert(0 && "unreachable: vartype_is_real2 is always false "
                             "without HAVE_CCTK_REAL2");
@@ -509,7 +519,18 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
                   var.SetSelection({{}, lsh});
                   const T *const ptr = fab.dataPtr() + vi * np;
                   assert(ptr);
-                  engine.Put(var, ptr);
+                  // D6/MEDIUM: engine.Put defaults to Mode::Deferred, which
+                  // requires `ptr` to stay alive until PerformPuts()/EndStep
+                  // (much further down). `fab` here can alias a REAL2
+                  // group's widened/carrier temporary (see write_group's
+                  // dispatch below), which does not live that long -- this
+                  // branch is dead today (combine_components is a
+                  // compile-time-true constexpr), but it is a plain `if`,
+                  // not `if constexpr`, so it still compiles and would be a
+                  // dangling-pointer write the moment that knob flips.
+                  // Sync costs nothing here: the data is already fully
+                  // materialised in `fab`.
+                  engine.Put(var, ptr, adios2::Mode::Sync);
                 } // for local_component
 
               } else { // if combine_components
@@ -543,7 +564,14 @@ void carpetx_adios2_t::OutputADIOS2(const cGH *const cctkGH,
 
                   } // for local_component
 
-                  engine.Put(var, alldata.data());
+                  // D6/MEDIUM: `alldata` is a block-scope std::vector, gone
+                  // by the time a deferred (default Mode::Deferred) Put
+                  // would actually read it at PerformPuts()/EndStep time --
+                  // this branch is dead today (combine_via_span is a
+                  // compile-time-true constexpr) but compiles unconditionally
+                  // (plain `if`, not `if constexpr`). Sync costs nothing:
+                  // the data is already fully materialised in `alldata`.
+                  engine.Put(var, alldata.data(), adios2::Mode::Sync);
 
                 } else { // if combine_via_span
 
