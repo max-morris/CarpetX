@@ -100,8 +100,14 @@ template <typename T, int order, int centering> struct interpolator {
   // TODO: Check whether interpolated variables are valid
 
   // Base case: only access a grid point
+  // D2 (mixed precision, CCTK_REAL2): return CT, not T. The stencil sum in
+  // the recursive case below is accumulated in CT; returning bare T here
+  // (the storage type) would round the loaded value to T for no reason
+  // before it is immediately widened back to CT by the caller -- see the
+  // interpolate_group/interpolate3d comments below for the full chain.
+  // No-op for T=CCTK_REAL/CCTK_REAL4 (CT == T there).
   template <int dir>
-  std::enable_if_t<(dir == -1), T>
+  std::enable_if_t<(dir == -1), CT>
   interpolate(const vect<int, dim> &i, const vect<CCTK_REAL, dim> &di) const {
     const amrex::IntVect j(i[0] + vars.begin.x, i[1] + vars.begin.y,
                            i[2] + vars.begin.z);
@@ -130,12 +136,13 @@ template <typename T, int order, int centering> struct interpolator {
     }
     assert(isfinite(float(val)));
 #endif
-    return val;
+    return CT(val);
   }
 
   // General case: interpolate in one direction, then recurse
+  // D2: return CT (see the base case above).
   template <int dir>
-  std::enable_if_t<(dir >= 0), T>
+  std::enable_if_t<(dir >= 0), CT>
   interpolate(const vect<int, dim> &i, const vect<CCTK_REAL, dim> &di) const {
     static_assert(dir < dim);
     const auto DI = vect<int, dim>::unit(dir);
@@ -158,7 +165,7 @@ template <typename T, int order, int centering> struct interpolator {
       const CT y0 = CT(interpolate<dir - 1>(i, di));
       switch (derivs[dir]) {
       case 0:
-        return T(y0);
+        return CT(y0);
       case 1:
         return 0;
       case 2:
@@ -170,9 +177,9 @@ template <typename T, int order, int centering> struct interpolator {
       const CT y1 = CT(interpolate<dir - 1>(i + DI, di));
       switch (derivs[dir]) {
       case 0:
-        return T((1 / CT(2) - x) * y0 + (1 / CT(2) + x) * y1);
+        return CT((1 / CT(2) - x) * y0 + (1 / CT(2) + x) * y1);
       case 1:
-        return T((-y0 + y1) / CT(grid.dx[dir]));
+        return CT((-y0 + y1) / CT(grid.dx[dir]));
       case 2:
         return 0;
       }
@@ -183,14 +190,14 @@ template <typename T, int order, int centering> struct interpolator {
       const CT y2 = CT(interpolate<dir - 1>(i + 2 * DI, di));
       switch (derivs[dir]) {
       case 0:
-        return T((-1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y0 +
+        return CT((-1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y0 +
                   (1 - pown(x, 2)) * y1 +
                   (1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y2);
       case 1:
-        return T(((-1 / CT(2) + x) * y0 - 2 * x * y1 + (1 / CT(2) + x) * y2) /
+        return CT(((-1 / CT(2) + x) * y0 - 2 * x * y1 + (1 / CT(2) + x) * y2) /
                   CT(grid.dx[dir]));
       case 2:
-        return T((y0 - 2 * y1 + y2) / pown(CT(grid.dx[dir]), 2));
+        return CT((y0 - 2 * y1 + y2) / pown(CT(grid.dx[dir]), 2));
       }
     }
     case 3: {
@@ -200,7 +207,7 @@ template <typename T, int order, int centering> struct interpolator {
       const CT y3 = CT(interpolate<dir - 1>(i + 3 * DI, di));
       switch (derivs[dir]) {
       case 0:
-        return T((-1 / CT(16) + 1 / CT(24) * x + 1 / CT(4) * pown(x, 2) -
+        return CT((-1 / CT(16) + 1 / CT(24) * x + 1 / CT(4) * pown(x, 2) -
                   1 / CT(6) * pown(x, 3)) *
                       y0 +
                   (9 / CT(16) - 9 / CT(8) * x - 1 / CT(4) * pown(x, 2) +
@@ -213,14 +220,14 @@ template <typename T, int order, int centering> struct interpolator {
                    1 / CT(6) * pown(x, 3)) *
                       y3);
       case 1:
-        return T(((1 / CT(24) + 1 / CT(2) * x - 1 / CT(2) * pown(x, 2)) * y0 +
+        return CT(((1 / CT(24) + 1 / CT(2) * x - 1 / CT(2) * pown(x, 2)) * y0 +
                    (-9 / CT(8) - 1 / CT(2) * x + 3 / CT(2) * pown(x, 2)) * y1 +
                    (9 / CT(8) - 1 / CT(2) * x - 3 / CT(2) * pown(x, 2)) * y2 +
                    (-1 / CT(24) + 1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) *
                        y3) /
                   CT(grid.dx[dir]));
       case 2:
-        return T(((1 / CT(2) - x) * y0 + (-1 / CT(2) + 3 * x) * y1 +
+        return CT(((1 / CT(2) - x) * y0 + (-1 / CT(2) + 3 * x) * y1 +
                    (-1 / CT(2) - 3 * x) * y2 + (1 / CT(2) + x) * y3) /
                   pown(CT(grid.dx[dir]), 2));
       }
@@ -233,7 +240,7 @@ template <typename T, int order, int centering> struct interpolator {
       const CT y4 = CT(interpolate<dir - 1>(i + 4 * DI, di));
       switch (derivs[dir]) {
       case 0:
-        return T((1 / CT(12) * x - 1 / CT(24) * pown(x, 2) -
+        return CT((1 / CT(12) * x - 1 / CT(24) * pown(x, 2) -
                   1 / CT(12) * pown(x, 3) + 1 / CT(24) * pown(x, 4)) *
                       y0 +
                   (-2 / CT(3) * x + 2 / CT(3) * pown(x, 2) +
@@ -247,7 +254,7 @@ template <typename T, int order, int centering> struct interpolator {
                    1 / CT(12) * pown(x, 3) + 1 / CT(24) * pown(x, 4)) *
                       y4);
       case 1:
-        return T(((1 / CT(12) - 1 / CT(12) * x - 1 / CT(4) * pown(x, 2) +
+        return CT(((1 / CT(12) - 1 / CT(12) * x - 1 / CT(4) * pown(x, 2) +
                    1 / CT(6) * pown(x, 3)) *
                       y0 +
                   (-2 / CT(3) + 4 / CT(3) * x + 1 / CT(2) * pown(x, 2) -
@@ -262,7 +269,7 @@ template <typename T, int order, int centering> struct interpolator {
                       y4) /
                   CT(grid.dx[dir]));
       case 2:
-        return T(((-1 / CT(12) - 1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y0 +
+        return CT(((-1 / CT(12) - 1 / CT(2) * x + 1 / CT(2) * pown(x, 2)) * y0 +
                   (4 / CT(3) + x - 2 * pown(x, 2)) * y1 +
                   (-5 / CT(2) + 3 * pown(x, 2)) * y2 +
                   (4 / CT(3) - x - 2 * pown(x, 2)) * y3 +
@@ -276,9 +283,16 @@ template <typename T, int order, int centering> struct interpolator {
     } // switch order
   }
 
+  // D2 (mixed precision, CCTK_REAL2): write straight into the caller's
+  // CCTK_REAL result vector. `interpolate<dim-1>` above already returns CT
+  // (float for CCTK_REAL2, T otherwise; CCTK_REAL for T=CCTK_REAL/REAL4),
+  // so there is nothing left to widen here except the final CT->CCTK_REAL
+  // narrow-or-no-op at the store below; the caller no longer needs to keep
+  // a separate std::vector<T> around only to copy it into
+  // varresult afterwards (interpolate_group below).
   template <typename Particles>
   void interpolate3d(const Particles &particles,
-                     std::vector<T> &varresult) const {
+                     std::vector<CCTK_REAL> &varresult) const {
     const auto x0 = grid.x0 + (2 * grid.lbnd - !indextype) * grid.dx / 2;
     // const auto x1 = x0 + (grid.lsh - 1 - indextype) * grid.dx;
     const auto dx = grid.dx;
@@ -313,16 +327,19 @@ template <typename T, int order, int centering> struct interpolator {
 
 #pragma omp parallel for simd
     for (int n = 0; n < np; ++n) {
-      // Particle positions are always stored in CCTK_REAL (AMReX's
-      // ParticleReal); narrow explicitly to CT here (a no-op for
-      // T=CCTK_REAL, double->float narrowing for T=CCTK_REAL4/CCTK_REAL2
-      // groups). D1 (mixed precision, CCTK_REAL2): using CT rather than T
-      // keeps `x - x0` (x0 is CCTK_REAL) a plain float/double built-in
-      // subtraction -- ambiguous only when the left operand is `__half`,
-      // which CT never is.
-      const vect<CT, dim> x{CT(particles[n].rdata(0)),
-                            CT(particles[n].rdata(1)),
-                            CT(particles[n].rdata(2))};
+      // D3 (mixed precision, CCTK_REAL2/CCTK_REAL4): particle positions are
+      // always stored in CCTK_REAL (AMReX's ParticleReal); keep the
+      // requested interpolation point in CCTK_REAL rather than narrowing it
+      // to CT. `x` is only used for the (already-CCTK_REAL) `qi`
+      // computation below and for the CCTK_VERROR message, so this needs no
+      // `__half` arithmetic (`CT` is never involved here at all) and
+      // ensures a REAL4/REAL2 variable is sampled at exactly the same
+      // point as a REAL8 variable would be in the same interpolation call,
+      // rather than at a point perturbed by float's ~1e-7 relative
+      // rounding.
+      const vect<CCTK_REAL, dim> x{particles[n].rdata(0),
+                                   particles[n].rdata(1),
+                                   particles[n].rdata(2)};
       // // Ensure the point is inside the domain
       // assert(all(x >= x0_allowed && x <= x1_allowed));
 
@@ -374,12 +391,17 @@ template <typename T, int order, int centering> struct interpolator {
 
       assert(is_allowed);
 
-      // R2: ternary result operand made T(-2) so the two branches have the
-      // same type (nvcc otherwise finds "int vs __half" ambiguous); CPU
-      // no-op.
-      const T res = !is_allowed ? T(-2) : interpolate<dim - 1>(i, di);
+      // D2 (mixed precision, CCTK_REAL2): keep the ternary result (and the
+      // store below) in CT, not T -- interpolate<dim-1> above now returns
+      // CT directly (the stencil-sum compute type), so narrowing to T here
+      // first would re-introduce exactly the extra half-ulp rounding this
+      // change removes, only to immediately widen it back out to CCTK_REAL
+      // on the next line. R2: ternary result operand made CT(-2) so the two
+      // branches have the same type (nvcc otherwise finds "int vs __half"
+      // ambiguous, though CT is in fact never __half); CPU no-op.
+      const CT res = !is_allowed ? CT(-2) : interpolate<dim - 1>(i, di);
 
-      varresult[n] = res;
+      varresult[n] = CCTK_REAL(res);
     }
   }
 };
@@ -392,6 +414,13 @@ template <typename T, int order, int centering> struct interpolator {
 // T=CCTK_REAL4/CCTK_REAL2, since interpolation results are collected and
 // returned to the flesh in double precision regardless of the source
 // group's storage precision.
+//
+// D2 (mixed precision, CCTK_REAL2): collect results directly into the
+// caller's `varresult`, rather than into a temporary std::vector<T> that is
+// then copied into `varresult` below (interpolator::interpolate3d above
+// now writes CCTK_REAL, having already done its own CT->CCTK_REAL widening
+// per point). For T=CCTK_REAL this also removes a redundant per-call
+// allocation/copy that existed even on the pure-double path.
 template <typename T, typename Particles>
 void interpolate_group(
     const int centering, const CCTK_INT interpolation_order,
@@ -400,9 +429,6 @@ void interpolate_group(
     const vect<int, dim> &derivs,
     const vect<vect<bool, dim>, 2> &patch_allowed_boundaries,
     const Particles &particles, std::vector<CCTK_REAL> &varresult) {
-  const int np = int(varresult.size());
-  std::vector<T> result(np);
-
   switch (centering) {
   case 0b000: {
     // Vertex centering
@@ -412,35 +438,35 @@ void interpolate_group(
       const interpolator<T, 0, 0b000> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 1: {
       const interpolator<T, 1, 0b000> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 2: {
       const interpolator<T, 2, 0b000> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 3: {
       const interpolator<T, 3, 0b000> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 4: {
       const interpolator<T, 4, 0b000> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     default:
@@ -460,35 +486,35 @@ void interpolate_group(
       const interpolator<T, 0, 0b111> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 1: {
       const interpolator<T, 1, 0b111> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 2: {
       const interpolator<T, 2, 0b111> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 3: {
       const interpolator<T, 3, 0b111> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     case 4: {
       const interpolator<T, 4, 0b111> interp{
           grid,  gi,   vi,     patch,
           level, vars, derivs, patch_allowed_boundaries};
-      interp.interpolate3d(particles, result);
+      interp.interpolate3d(particles, varresult);
       break;
     }
     default:
@@ -504,9 +530,6 @@ void interpolate_group(
     CCTK_VERROR("Centering [%d,%d,%d] not yet supported", (centering >> 2) & 1,
                (centering >> 1) & 1, centering & 1);
   } // switch centering
-
-  for (int n = 0; n < np; ++n)
-    varresult[n] = CCTK_REAL(result[n]);
 }
 
 } // namespace
