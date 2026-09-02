@@ -174,8 +174,9 @@ void define_point_type() {
       const auto &fineleveldata = patchdata.leveldata.at(level + 1);
       const auto &groupdata = *leveldata.groupdata.at(gi_ind);
       const auto &finegroupdata = *fineleveldata.groupdata.at(gi_ind);
-      amrex::MultiFab &mfab_ind = *groupdata.mfab.at(tl);
-      const amrex::MultiFab &finemfab_ind = *finegroupdata.mfab.at(tl);
+      amrex::MultiFab &mfab_ind = CarpetX::as_mfab_real(*groupdata.mfab.at(tl));
+      const amrex::MultiFab &finemfab_ind =
+          CarpetX::as_mfab_real(*finegroupdata.mfab.at(tl));
       const amrex::IntVect reffact{2, 2, 2};
       const int rank = sum(Arith::vect<int, 3>(indextype));
       switch (rank) {
@@ -246,7 +247,7 @@ void define_point_type() {
       for (const auto &leveldata : patchdata.leveldata) {
         const int level = leveldata.level;
         const auto &groupdata = *leveldata.groupdata.at(gi_ind);
-        amrex::MultiFab &mfab_ind = *groupdata.mfab.at(tl);
+        amrex::MultiFab &mfab_ind = CarpetX::as_mfab_real(*groupdata.mfab.at(tl));
         tasks1.submit_serially(
             [&tasks2, &groupdata, &mfab_ind, &patchdata, level]() {
               FillPatch_Sync(tasks2, groupdata, mfab_ind,
@@ -315,9 +316,11 @@ void define_point_type() {
         const auto &coarseleveldata = patchdata.leveldata.at(level - 1);
         const auto &groupdata = *leveldata.groupdata.at(gi_ind);
         const auto &coarsegroupdata = *coarseleveldata.groupdata.at(gi_ind);
-        amrex::MultiFab &mfab_ind = *groupdata.mfab.at(tl);
-        amrex::MultiFab &coarsemfab_ind = *coarsegroupdata.mfab.at(tl);
-        amrex::Interpolater *const interpolator = groupdata.interpolator;
+        amrex::MultiFab &mfab_ind = CarpetX::as_mfab_real(*groupdata.mfab.at(tl));
+        amrex::MultiFab &coarsemfab_ind =
+            CarpetX::as_mfab_real(*coarsegroupdata.mfab.at(tl));
+        CarpetX::InterpolaterT<CCTK_REAL> *const interpolator =
+            groupdata.interpolator_real8;
         tasks1.submit_serially([&tasks2, &tasks3, &groupdata, &coarsegroupdata,
                                 &mfab_ind, &coarsemfab_ind, &patchdata,
                                 &interpolator, level]() {
@@ -606,9 +609,10 @@ void enumerate_points(
     for (int level = int(patchdata.leveldata.size()) - 2; level >= 0; --level) {
       const auto &leveldata = patchdata.leveldata.at(level);
       const auto &fineleveldata = patchdata.leveldata.at(level + 1);
-      amrex::MultiFab &mfab_idx = *leveldata.groupdata.at(gi_idx)->mfab.at(tl);
-      const amrex::MultiFab &finemfab_idx =
-          *fineleveldata.groupdata.at(gi_idx)->mfab.at(tl);
+      amrex::MultiFab &mfab_idx = CarpetX::as_mfab_real(
+          *leveldata.groupdata.at(gi_idx)->mfab.at(tl));
+      const amrex::MultiFab &finemfab_idx = CarpetX::as_mfab_real(
+          *fineleveldata.groupdata.at(gi_idx)->mfab.at(tl));
       const amrex::IntVect reffact{2, 2, 2};
       const int rank = sum(Arith::vect<int, 3>(indextype));
       switch (rank) {
@@ -638,7 +642,7 @@ void enumerate_points(
       for (const auto &leveldata : patchdata.leveldata) {
         const int level = leveldata.level;
         const auto &groupdata = *leveldata.groupdata.at(gi_idx);
-        amrex::MultiFab &mfab_idx = *groupdata.mfab.at(tl);
+        amrex::MultiFab &mfab_idx = CarpetX::as_mfab_real(*groupdata.mfab.at(tl));
         tasks1.submit_serially(
             [&tasks2, &patchdata, &groupdata, &mfab_idx, level]() {
               FillPatch_Sync(tasks2, groupdata, mfab_idx,
@@ -703,8 +707,8 @@ void enumerate_points(
             assert(component_prolongated_sizes.at(level).at(component) == 0);
           if (component_prolongated_sizes.at(level).at(component) == 0)
             return;
-          const auto &mfab =
-              *patchdata.leveldata.at(level).groupdata.at(gi_idx)->mfab.at(tl);
+          const auto &mfab = CarpetX::as_mfab_real(
+              *patchdata.leveldata.at(level).groupdata.at(gi_idx)->mfab.at(tl));
           const auto &fabbox = mfab.fabbox(index);
           const Arith::vect<int, 3> amrex_origin{
               fabbox.smallEnd(0), fabbox.smallEnd(1), fabbox.smallEnd(2)};
@@ -767,8 +771,8 @@ void enumerate_points(
           // The finest level has no prolongation sources
           if (level == int(patchdata.leveldata.size()) - 1)
             return;
-          const auto &mfab =
-              *patchdata.leveldata.at(level).groupdata.at(gi_idx)->mfab.at(tl);
+          const auto &mfab = CarpetX::as_mfab_real(
+              *patchdata.leveldata.at(level).groupdata.at(gi_idx)->mfab.at(tl));
           const auto &fabbox = mfab.fabbox(index);
           const Arith::vect<int, 3> amrex_origin{
               fabbox.smallEnd(0), fabbox.smallEnd(1), fabbox.smallEnd(2)};
@@ -841,10 +845,11 @@ void enumerate_points(
             assert(component_prolongated_sizes.at(level).at(component) == 0);
           if (component_prolongated_sizes.at(level).at(component) == 0)
             return;
-          const auto &mfab = *CarpetX::ghext->patchdata.at(patch)
-                                  .leveldata.at(level)
-                                  .groupdata.at(gi_idx)
-                                  ->mfab.at(tl);
+          const auto &mfab = CarpetX::as_mfab_real(
+              *CarpetX::ghext->patchdata.at(patch)
+                   .leveldata.at(level)
+                   .groupdata.at(gi_idx)
+                   ->mfab.at(tl));
           const auto &fabbox = mfab.fabbox(index);
           const Arith::vect<int, 3> amrex_origin{
               fabbox.smallEnd(0), fabbox.smallEnd(1), fabbox.smallEnd(2)};
@@ -936,6 +941,16 @@ void copy_Cactus_to_PETSc(
     assert(vn >= 0);
     const int gi = CCTK_GroupIndexFromVarI(vn);
     assert(gi >= 0);
+    // PDESolvers reads/writes these groups through raw CCTK_REAL* pointer
+    // casts (below), so they must actually be stored as CCTK_REAL/REAL8.
+    // Mirrors the vartype_is_real8 guard in CarpetX/src/linsolve.cxx:76-87.
+    cGroup group;
+    int gierr = CCTK_GroupData(gi, &group);
+    assert(!gierr);
+    if (!CarpetX::vartype_is_real8(group.vartype))
+      CCTK_VERROR("PDESolvers only supports CCTK_REAL grid function groups; "
+                  "group %s is not CCTK_REAL",
+                  CCTK_FullGroupName(gi));
     gis.push_back(gi);
     const int v0 = CCTK_FirstVarIndexI(gi);
     assert(v0 >= 0);
@@ -1024,6 +1039,16 @@ void copy_PETSc_to_Cactus(
     assert(vn >= 0);
     const int gi = CCTK_GroupIndexFromVarI(vn);
     assert(gi >= 0);
+    // PDESolvers reads/writes these groups through raw CCTK_REAL* pointer
+    // casts (below), so they must actually be stored as CCTK_REAL/REAL8.
+    // Mirrors the vartype_is_real8 guard in CarpetX/src/linsolve.cxx:76-87.
+    cGroup group;
+    int gierr = CCTK_GroupData(gi, &group);
+    assert(!gierr);
+    if (!CarpetX::vartype_is_real8(group.vartype))
+      CCTK_VERROR("PDESolvers only supports CCTK_REAL grid function groups; "
+                  "group %s is not CCTK_REAL",
+                  CCTK_FullGroupName(gi));
     gis.push_back(gi);
     const int v0 = CCTK_FirstVarIndexI(gi);
     assert(v0 >= 0);
