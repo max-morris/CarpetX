@@ -2865,8 +2865,13 @@ void Restrict(const cGH *cctkGH, int level, const std::vector<int> &groups) {
                 average_down_faces_local(finemfab, crsemfab, reffact);
                 break;
               case 3:
-                average_down(finemfab, crsemfab, 0, groupdata.numvars,
-                            reffact);
+                // D5: accumulate in float, not _Float16 (see
+                // restrict_edges.hxx's average_down_local) -- summing
+                // 8 (or more, at finer refinement ratios) fine CCTK_REAL2
+                // values directly in _Float16 can overflow (max 65504) and
+                // loses precision even when it does not.
+                average_down_local(finemfab, crsemfab, 0, groupdata.numvars,
+                                   reffact);
                 break;
               default:
                 assert(0);

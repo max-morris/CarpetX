@@ -59,6 +59,11 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void average_down_edges_kernel(
     int i, int j, int k, int n, const amrex::Array4<T> &crse,
     const amrex::Array4<T const> &fine, const amrex::IntVect &ratio,
     int dir) noexcept {
+  // Accumulate in `compute_t<T>` (driver.hxx): for T=CCTK_REAL2 this widens
+  // to float, avoiding the precision loss (and, for larger stencils,
+  // overflow) of summing several _Float16 values directly. No-op for
+  // REAL4/REAL8 (compute_t<T> == T there).
+  using CT = compute_t<T>;
   const int facx = ratio[0];
   const int facy = ratio[1];
   const int facz = ratio[2];
@@ -67,27 +72,27 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void average_down_edges_kernel(
   const int kk = k * facz;
   switch (dir) {
   case 0: {
-    const T facinv = T(1) / T(facx);
-    T c(0);
+    const CT facinv = CT(1) / CT(facx);
+    CT c(0);
     for (int iref = 0; iref < facx; ++iref)
-      c += fine(ii + iref, jj, kk, n);
-    crse(i, j, k, n) = c * facinv;
+      c += CT(fine(ii + iref, jj, kk, n));
+    crse(i, j, k, n) = T(c * facinv);
     break;
   }
   case 1: {
-    const T facinv = T(1) / T(facy);
-    T c(0);
+    const CT facinv = CT(1) / CT(facy);
+    CT c(0);
     for (int jref = 0; jref < facy; ++jref)
-      c += fine(ii, jj + jref, kk, n);
-    crse(i, j, k, n) = c * facinv;
+      c += CT(fine(ii, jj + jref, kk, n));
+    crse(i, j, k, n) = T(c * facinv);
     break;
   }
   case 2: {
-    const T facinv = T(1) / T(facz);
-    T c(0);
+    const CT facinv = CT(1) / CT(facz);
+    CT c(0);
     for (int kref = 0; kref < facz; ++kref)
-      c += fine(ii, jj, kk + kref, n);
-    crse(i, j, k, n) = c * facinv;
+      c += CT(fine(ii, jj, kk + kref, n));
+    crse(i, j, k, n) = T(c * facinv);
     break;
   }
   default:
@@ -149,6 +154,9 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void average_down_faces_kernel(
     int i, int j, int k, int n, const amrex::Array4<T> &crse,
     const amrex::Array4<T const> &fine, const amrex::IntVect &ratio,
     int idir) noexcept {
+  // See average_down_edges_kernel above: accumulate in compute_t<T>
+  // (float for CCTK_REAL2, T otherwise) instead of T.
+  using CT = compute_t<T>;
   const int facx = ratio[0];
   const int facy = ratio[1];
   const int facz = ratio[2];
@@ -157,30 +165,30 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void average_down_faces_kernel(
   const int kk = k * facz;
   switch (idir) {
   case 0: {
-    const T facinv = T(1) / T(facy * facz);
-    T c(0);
+    const CT facinv = CT(1) / CT(facy * facz);
+    CT c(0);
     for (int kref = 0; kref < facz; ++kref)
       for (int jref = 0; jref < facy; ++jref)
-        c += fine(ii, jj + jref, kk + kref, n);
-    crse(i, j, k, n) = c * facinv;
+        c += CT(fine(ii, jj + jref, kk + kref, n));
+    crse(i, j, k, n) = T(c * facinv);
     break;
   }
   case 1: {
-    const T facinv = T(1) / T(facx * facz);
-    T c(0);
+    const CT facinv = CT(1) / CT(facx * facz);
+    CT c(0);
     for (int kref = 0; kref < facz; ++kref)
       for (int iref = 0; iref < facx; ++iref)
-        c += fine(ii + iref, jj, kk + kref, n);
-    crse(i, j, k, n) = c * facinv;
+        c += CT(fine(ii + iref, jj, kk + kref, n));
+    crse(i, j, k, n) = T(c * facinv);
     break;
   }
   case 2: {
-    const T facinv = T(1) / T(facx * facy);
-    T c(0);
+    const CT facinv = CT(1) / CT(facx * facy);
+    CT c(0);
     for (int jref = 0; jref < facy; ++jref)
       for (int iref = 0; iref < facx; ++iref)
-        c += fine(ii + iref, jj + jref, kk, n);
-    crse(i, j, k, n) = c * facinv;
+        c += CT(fine(ii + iref, jj + jref, kk, n));
+    crse(i, j, k, n) = T(c * facinv);
     break;
   }
   default:
@@ -232,6 +240,97 @@ void average_down_faces_local(const amrex::FabArray<FAB> &fine,
                               amrex::MFInfo(), amrex::DefaultFabFactory<FAB>());
     average_down_faces_local(fine, ctmp, ratio, ngcrse);
     crse.ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse);
+  }
+}
+
+// D5: FAB-templated mirror of amrex::average_down(const FabArray<FAB>&,
+// FabArray<FAB>&, int scomp, int ncomp, const IntVect&) (AMReX_MultiFabUtil.H),
+// restricted to the cell-centered (rank-3, "volume") case -- the only case
+// this is used for -- with the accumulation done in `compute_t<T>`
+// (driver.hxx) rather than T. amrex::average_down's own point kernel,
+// amrex_avgdown (AMReX_MultiFabUtil_3D_C.H), sums `ratio[0]*ratio[1]*ratio[2]`
+// fine values directly in T; for T=CCTK_REAL2 (_Float16, max finite value
+// 65504) that overflows to +-infinity whenever the local mean of those
+// values exceeds roughly 65504/(facx*facy*facz) (e.g. ~8192 for a factor-2
+// 3-D refinement), and loses precision even when it does not. REAL4/REAL8
+// keep using amrex::average_down unchanged (compute_t<T> == T there, and
+// summing a handful of doubles/floats has none of that risk).
+//
+// Structured as a line-by-line mirror of amrex::average_down<FAB>'s
+// non-nodal branch: same BoxArray/DistributionMap comparison to pick the
+// direct path vs. the coarsen-into-a-temporary-then-ParallelCopy fallback,
+// same tilebox and AMREX_HOST_DEVICE_PARALLEL_FOR_4D launch style as
+// average_down_faces_local above. The GPU-fusing fast path
+// (Gpu::inLaunchRegion() && isFusingCandidate()) is intentionally omitted,
+// matching average_down_faces_local; AMREX_HOST_DEVICE_PARALLEL_FOR_4D below
+// still dispatches correctly on GPU builds, just without kernel fusion.
+template <typename T>
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE void average_down_kernel(
+    int i, int j, int k, int n, const amrex::Array4<T> &crse,
+    const amrex::Array4<T const> &fine, int ccomp, int fcomp,
+    const amrex::IntVect &ratio) noexcept {
+  using CT = compute_t<T>;
+  const int facx = ratio[0];
+  const int facy = ratio[1];
+  const int facz = ratio[2];
+  const CT volfrac = CT(1) / CT(facx * facy * facz);
+  const int ii = i * facx;
+  const int jj = j * facy;
+  const int kk = k * facz;
+  CT c(0);
+  for (int kref = 0; kref < facz; ++kref)
+    for (int jref = 0; jref < facy; ++jref)
+      for (int iref = 0; iref < facx; ++iref)
+        c += CT(fine(ii + iref, jj + jref, kk + kref, n + fcomp));
+  crse(i, j, k, n + ccomp) = T(volfrac * c);
+}
+
+template <typename FAB>
+void average_down_local(const amrex::FabArray<FAB> &fine,
+                        amrex::FabArray<FAB> &crse, int scomp, int ncomp,
+                        const amrex::IntVect &ratio) {
+  using T = typename FAB::value_type;
+
+  AMREX_ASSERT(crse.nComp() >= scomp + ncomp);
+  AMREX_ASSERT(fine.nComp() >= scomp + ncomp);
+  AMREX_ASSERT(crse.is_cell_centered() && fine.is_cell_centered());
+
+  amrex::BoxArray crse_fine_ba = fine.boxArray();
+  crse_fine_ba.coarsen(ratio);
+
+  if (crse_fine_ba == crse.boxArray() &&
+      fine.DistributionMap() == crse.DistributionMap()) {
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+    for (amrex::MFIter mfi(crse, amrex::TilingIfNotGPU()); mfi.isValid();
+        ++mfi) {
+      // NOTE: The tilebox is defined at the coarse level.
+      const amrex::Box &bx = mfi.tilebox();
+      auto const &crsearr = crse.array(mfi);
+      auto const &finearr = fine.const_array(mfi);
+      AMREX_HOST_DEVICE_PARALLEL_FOR_4D(bx, ncomp, i, j, k, n, {
+        average_down_kernel<T>(i, j, k, n, crsearr, finearr, scomp, scomp,
+                               ratio);
+      });
+    }
+  } else {
+    amrex::FabArray<FAB> crse_fine(crse_fine_ba, fine.DistributionMap(),
+                                   ncomp, 0, amrex::MFInfo(),
+                                   amrex::DefaultFabFactory<FAB>());
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+    for (amrex::MFIter mfi(crse_fine, amrex::TilingIfNotGPU()); mfi.isValid();
+        ++mfi) {
+      const amrex::Box &bx = mfi.tilebox();
+      auto const &crsearr = crse_fine.array(mfi);
+      auto const &finearr = fine.const_array(mfi);
+      AMREX_HOST_DEVICE_PARALLEL_FOR_4D(bx, ncomp, i, j, k, n, {
+        average_down_kernel<T>(i, j, k, n, crsearr, finearr, 0, scomp, ratio);
+      });
+    }
+    crse.ParallelCopy(crse_fine, 0, scomp, ncomp);
   }
 }
 

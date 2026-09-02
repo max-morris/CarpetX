@@ -402,13 +402,10 @@ template <typename T> struct coeffs1d<CC, ENO, /*order*/ 4, T> {
 // CCTK_REAL2, and convert only the single final interpolated value back to
 // T (CCTK_REAL2), which is always representable since interpolation
 // coefficients are O(1) and physically-sized input data is as well.
-#ifdef HAVE_CCTK_REAL2
-template <typename T>
-using prolongate_compute_t =
-    std::conditional_t<std::is_same_v<T, CCTK_REAL2>, float, T>;
-#else
-template <typename T> using prolongate_compute_t = T;
-#endif
+// `compute_t<T>` (driver.hxx) is the same "storage precision != compute
+// precision" alias, shared with restrict_edges.hxx; kept as a separate name
+// here for readability at this file's many call sites.
+template <typename T> using prolongate_compute_t = compute_t<T>;
 
 // D5 (mixed precision, CCTK_REAL2): `std::isfinite` has no `_Float16`
 // overload, and a bare `_Float16` argument is ambiguous between its
@@ -1498,9 +1495,9 @@ void prolongate_3d_rf2<
   constexpr vect<int, dim> order{ORDERI, ORDERJ, ORDERK};
 
   {
-    static test_interp1d<CENTI, INTPI, ORDERI, T> testi;
-    static test_interp1d<CENTJ, INTPJ, ORDERJ, T> testj;
-    static test_interp1d<CENTK, INTPK, ORDERK, T> testk;
+    static test_interp1d<CENTI, INTPI, ORDERI, CCTK_REAL> testi;
+    static test_interp1d<CENTJ, INTPJ, ORDERJ, CCTK_REAL> testj;
+    static test_interp1d<CENTK, INTPK, ORDERK, CCTK_REAL> testk;
   }
 
 #ifdef CCTK_DEBUG
@@ -1947,9 +1944,9 @@ void prolongate_3d_rf2<
   constexpr vect<int, dim> order{ORDERI, ORDERJ, ORDERK};
 
   {
-    static test_interp1d<CENTI, INTPI, ORDERI, T> testi;
-    static test_interp1d<CENTJ, INTPJ, ORDERJ, T> testj;
-    static test_interp1d<CENTK, INTPK, ORDERK, T> testk;
+    static test_interp1d<CENTI, INTPI, ORDERI, CCTK_REAL> testi;
+    static test_interp1d<CENTJ, INTPJ, ORDERJ, CCTK_REAL> testj;
+    static test_interp1d<CENTK, INTPK, ORDERK, CCTK_REAL> testk;
   }
 
 #ifdef CCTK_DEBUG
