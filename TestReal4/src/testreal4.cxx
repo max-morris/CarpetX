@@ -5,6 +5,8 @@
 // (expanded inside DECLARE_CCTK_ARGUMENTSX_<function>) produces GF3D2
 // accessors -- see src/testreal4_gf3d5.cxx for the GF3D5 counterpart.
 
+#include "testreal4_check_every.hxx"
+
 #include <loop_device.hxx>
 
 #include <cctk.h>
@@ -55,6 +57,9 @@ extern "C" void TestReal4_Initialize(CCTK_ARGUMENTS) {
 extern "C" void TestReal4_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_Check;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   // Compile-time proof that DECLARE_CCTK_PARAMETERS binds each sized-REAL
   // param.ccl parameter at exactly its declared width, not merely to a

@@ -14,8 +14,11 @@
 // no rounding tolerance needed (unlike the trigonometric analytic function
 // used for the grid-function periodic test in testreal4.cxx).
 
+#include "testreal4_check_every.hxx"
+
 #include <cctk.h>
 #include <cctk_Arguments.h>
+#include <cctk_Parameters.h>
 
 namespace TestReal4 {
 
@@ -35,6 +38,10 @@ extern "C" void TestReal4_ScalarArray_Initialize(CCTK_ARGUMENTS) {
 
 extern "C" void TestReal4_ScalarArray_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_ScalarArray_Check;
+  DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   if (*scalar8 != CCTK_REAL8(3.75))
     CCTK_VERROR("TestReal4: grid scalar REAL8 \"scalar8\" mismatch: have "

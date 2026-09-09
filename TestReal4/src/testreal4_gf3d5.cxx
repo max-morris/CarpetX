@@ -8,6 +8,8 @@
 // CCTK_REAL4 grid function.
 #define CARPETX_GF3D5
 
+#include "testreal4_check_every.hxx"
+
 #include <loop_device.hxx>
 
 #include <cctk.h>
@@ -35,6 +37,9 @@ constexpr CCTK_REAL4 amplitude4 = 2.0f;
 extern "C" void TestReal4_CheckGF3D5(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_CheckGF3D5;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs;
 

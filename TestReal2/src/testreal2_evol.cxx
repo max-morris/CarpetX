@@ -20,6 +20,7 @@
 // REAL2 tolerances because this is the one REAL2 test where rounding error
 // actually *accumulates* step over step rather than being applied once.
 
+#include "testreal2_check_every.hxx"
 #include "testreal2_requires_real2.hxx"
 
 #include <loop_device.hxx>
@@ -100,6 +101,9 @@ extern "C" void TestReal2_Evol_RHS(CCTK_ARGUMENTS) {
 extern "C" void TestReal2_Evol_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_Evol_Check;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs, std::exp;
 

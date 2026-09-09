@@ -12,16 +12,19 @@
 // Scheduled (schedule.ccl, gated behind the shared TestReal4::
 // run_periodic_test so it runs in the same parfiles as the periodic
 // self-test, notably par/testreal2.par) as a global routine that touches no
-// grid variables, so it needs no DECLARE_CCTK_PARAMETERS and no grid loop.
+// grid variables, so it needs no grid loop; DECLARE_CCTK_PARAMETERS is only
+// needed for the check_every throttle below.
 //
 // C/C++ only, per interface.ccl's comment: CCTK_REAL2 has no Fortran
 // spelling, so TestReal2_MixArgs must never be called from Fortran; there
 // is no Fortran caller anywhere in this coverage.
 
+#include "testreal2_check_every.hxx"
 #include "testreal2_requires_real2.hxx"
 
 #include <cctk.h>
 #include <cctk_Arguments.h>
+#include <cctk_Parameters.h>
 
 #include <cmath>
 
@@ -29,6 +32,10 @@ namespace TestReal2 {
 
 extern "C" void TestReal2_MixArgs_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_MixArgs_Check;
+  DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   // Known argument values, chosen to be exactly representable at their
   // declared width -- including CCTK_REAL2's binary16 (0.5 = 2^-1) -- so

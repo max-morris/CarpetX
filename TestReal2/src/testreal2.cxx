@@ -18,6 +18,7 @@
 // CARPETX_GF3D5 is not defined, so the CCTK_CENTERING_GF macro (expanded
 // inside DECLARE_CCTK_ARGUMENTSX_<function>) produces GF3D2 accessors.
 
+#include "testreal2_check_every.hxx"
 #include "testreal2_requires_real2.hxx"
 
 #include <loop_device.hxx>
@@ -92,6 +93,9 @@ extern "C" void TestReal2_Initialize(CCTK_ARGUMENTS) {
 extern "C" void TestReal2_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_Check;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   // Compile-time proof that DECLARE_CCTK_PARAMETERS binds a sized-REAL
   // param.ccl parameter at exactly its declared width, not merely to a

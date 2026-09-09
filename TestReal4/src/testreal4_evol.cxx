@@ -22,6 +22,8 @@
 // O(dt^4) RK4 truncation error stays well below this) and float ~1e-5
 // relative (dominated by CCTK_REAL4 rounding, not by truncation error).
 
+#include "testreal4_check_every.hxx"
+
 #include <loop_device.hxx>
 
 #include <cctk.h>
@@ -104,6 +106,9 @@ extern "C" void TestReal4_Evol_RHS(CCTK_ARGUMENTS) {
 extern "C" void TestReal4_Evol_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_Evol_Check;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs, std::exp;
 

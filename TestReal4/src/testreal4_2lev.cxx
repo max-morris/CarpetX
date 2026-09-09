@@ -1,6 +1,6 @@
 // TestReal4: self-checking mixed-precision test for CarpetX.
 //
-// Phase 2: two-level regrid + prolongation test. A vertex-centred grid
+// Phase 2: two-level regrid + prolongation test. A vertex-centered grid
 // function holding a linear function of the coordinates is initialized on
 // the (single) coarse level, then a static refined region is created via
 // BoxInBox/CarpetXRegrid (see par/testreal4_2lev.par). Because the function
@@ -32,6 +32,8 @@
 // groups are initialized with the same linear analytic function, and
 // TestReal4_2Lev_FaceCheck below verifies them on the coarse level after
 // the fine level created by the regrid is restricted back down.
+
+#include "testreal4_check_every.hxx"
 
 #include <loop_device.hxx>
 
@@ -153,6 +155,9 @@ extern "C" void TestReal4_2Lev_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_2Lev_Check;
   DECLARE_CCTK_PARAMETERS;
 
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
+
   using std::abs;
 
   // Tighter than the single-level periodic test's tolerances would allow
@@ -217,6 +222,9 @@ extern "C" void TestReal4_2Lev_Check(CCTK_ARGUMENTS) {
 extern "C" void TestReal4_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_2Lev_EdgeCheck;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs;
 
@@ -362,6 +370,9 @@ extern "C" void TestReal4_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
 extern "C" void TestReal4_2Lev_FaceCheck(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_2Lev_FaceCheck;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs;
 

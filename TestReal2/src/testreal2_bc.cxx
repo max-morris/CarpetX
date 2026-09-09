@@ -2,7 +2,7 @@
 // (binary16); the CCTK_REAL8/CCTK_REAL4 counterpart is in the sibling thorn
 // TestReal4 (src/testreal4_bc.cxx).
 //
-// A cell-centred grid function is initialized to a value that differs from
+// A cell-centered grid function is initialized to a value that differs from
 // its dirichlet value, then synced (which applies the physical boundary
 // conditions, see CarpetX's GroupData::apply_boundary_conditions and
 // BoundaryCondition<T> in boundaries.cxx/boundaries_impl.hxx). The check
@@ -13,6 +13,7 @@
 // The dirichlet constant below must match the `dirichlet_values` TAGS on
 // state2_bc in interface.ccl.
 
+#include "testreal2_check_every.hxx"
 #include "testreal2_requires_real2.hxx"
 
 #include <loop_device.hxx>
@@ -71,6 +72,9 @@ extern "C" void TestReal2_BC_Initialize(CCTK_ARGUMENTS) {
 extern "C" void TestReal2_BC_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_BC_Check;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs;
 

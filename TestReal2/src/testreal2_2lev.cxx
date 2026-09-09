@@ -3,7 +3,7 @@
 // CCTK_REAL8/CCTK_REAL4 counterparts live in the sibling thorn TestReal4
 // (src/testreal4_2lev.cxx), which documents the setup in full; in brief:
 //
-// A vertex-centred grid function holding a function that is linear in the
+// A vertex-centered grid function holding a function that is linear in the
 // coordinates is initialized on the (single) coarse level, then a static
 // refined region is created via BoxInBox/CarpetXRegrid (see
 // par/testreal2_2lev.par). Because the function is linear and
@@ -21,6 +21,7 @@
 // goes through CarpetX's local __half-clean average_down_faces_local rather
 // than stock amrex::average_down_faces -- see interface.ccl).
 
+#include "testreal2_check_every.hxx"
 #include "testreal2_requires_real2.hxx"
 
 #include <loop_device.hxx>
@@ -164,6 +165,9 @@ extern "C" void TestReal2_2Lev_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_2Lev_Check;
   DECLARE_CCTK_PARAMETERS;
 
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
+
   using std::abs;
 
   int n_checked = 0;
@@ -209,6 +213,9 @@ extern "C" void TestReal2_2Lev_Check(CCTK_ARGUMENTS) {
 extern "C" void TestReal2_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_2Lev_EdgeCheck;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs;
 
@@ -311,6 +318,9 @@ extern "C" void TestReal2_2Lev_EdgeCheck(CCTK_ARGUMENTS) {
 extern "C" void TestReal2_2Lev_FaceCheck(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_2Lev_FaceCheck;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs;
 

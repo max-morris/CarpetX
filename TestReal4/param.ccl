@@ -52,6 +52,11 @@ CCTK_REAL evol_u0 "Initial value u(t=0) for the evolution smoke test"
   *:* :: "any value"
 } 1.0
 
+CCTK_INT check_every "Run the self-checks (every *_Check / *_EdgeCheck / *_FaceCheck / CheckGF3D5 / MixArgs_Check routine) only every this many iterations, and always at the final iteration (cctk_itlast). 1 = every iteration (the default, unchanged behavior). The checks are serial host loops over the whole grid, so performance runs set this large."
+{
+  1:* :: "a positive iteration stride"
+} 1
+
 PRIVATE:
 
 # --- Sized-REAL parameter coverage -------------------------------------
@@ -73,3 +78,9 @@ CCTK_REAL4 check_tolerance4 "Pass/fail tolerance for state4::u4 in the periodic 
 {
   (0:1] :: "any positive tolerance, at most 1"
 } 1.0e-6
+
+# Needed by the check_this_iteration() helper (src/testreal4_check_every.hxx)
+# so a throttled self-check still always runs at the final iteration.
+SHARES: Cactus
+
+USES CCTK_INT cctk_itlast

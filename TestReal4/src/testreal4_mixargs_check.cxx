@@ -13,10 +13,14 @@
 // Scheduled (schedule.ccl, gated behind run_periodic_test so it runs in
 // the same parfiles as the original periodic self-test, notably
 // par/testreal4.par) as a global routine that touches no grid variables,
-// so it needs no DECLARE_CCTK_PARAMETERS and no grid loop.
+// so it needs no grid loop; DECLARE_CCTK_PARAMETERS is only needed for the
+// check_every throttle below.
+
+#include "testreal4_check_every.hxx"
 
 #include <cctk.h>
 #include <cctk_Arguments.h>
+#include <cctk_Parameters.h>
 
 #include <cmath>
 
@@ -24,6 +28,10 @@ namespace TestReal4 {
 
 extern "C" void TestReal4_MixArgs_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_MixArgs_Check;
+  DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   // Known argument values, chosen to be exactly representable at their
   // declared width, so the "expected" value computed below is not itself

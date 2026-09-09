@@ -1,6 +1,6 @@
 // TestReal4: self-checking mixed-precision test for CarpetX.
 //
-// Phase 2: physical (dirichlet) boundary condition test. A cell-centred
+// Phase 2: physical (dirichlet) boundary condition test. A cell-centered
 // grid function is initialized to a value that differs from its dirichlet
 // value, then synced (which applies the physical boundary conditions, see
 // GroupData::apply_boundary_conditions and BoundaryCondition<T> in
@@ -13,6 +13,8 @@
 //
 // The dirichlet constants below must match the `dirichlet_values` TAGS on
 // state8_bc/state4_bc/state2_bc in interface.ccl.
+
+#include "testreal4_check_every.hxx"
 
 #include <loop_device.hxx>
 
@@ -50,6 +52,9 @@ extern "C" void TestReal4_BC_Initialize(CCTK_ARGUMENTS) {
 extern "C" void TestReal4_BC_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal4_BC_Check;
   DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   using std::abs;
 

@@ -42,3 +42,10 @@ USES BOOLEAN run_bc_test
 USES BOOLEAN run_evol_test
 USES CCTK_REAL evol_decay_rate
 USES CCTK_REAL evol_u0
+USES CCTK_INT check_every
+
+# Needed by the check_this_iteration() helper (src/testreal2_check_every.hxx)
+# so a throttled self-check still always runs at the final iteration.
+SHARES: Cactus
+
+USES CCTK_INT cctk_itlast

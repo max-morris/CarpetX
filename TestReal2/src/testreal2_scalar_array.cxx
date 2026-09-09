@@ -16,10 +16,12 @@
 // tolerance needed (unlike the trigonometric analytic function used for the
 // grid-function periodic test in testreal2.cxx).
 
+#include "testreal2_check_every.hxx"
 #include "testreal2_requires_real2.hxx"
 
 #include <cctk.h>
 #include <cctk_Arguments.h>
+#include <cctk_Parameters.h>
 
 namespace TestReal2 {
 
@@ -41,6 +43,10 @@ extern "C" void TestReal2_ScalarArray_Initialize(CCTK_ARGUMENTS) {
 
 extern "C" void TestReal2_ScalarArray_Check(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestReal2_ScalarArray_Check;
+  DECLARE_CCTK_PARAMETERS;
+
+  if (!check_this_iteration(cctk_iteration, check_every, cctk_itlast))
+    return;
 
   if (*scalar2 != CCTK_REAL2(-2.5))
     CCTK_VERROR("TestReal2: grid scalar REAL2 \"scalar2\" mismatch: have "
