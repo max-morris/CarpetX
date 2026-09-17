@@ -1665,6 +1665,8 @@ As an example, to produce \texttt{ADIOS2} files at every $2$ time steps in \text
   \caption{\CarpetX\space parameters for norms output.}
 \end{table}
 
+With \texttt{out\_norm\_per\_level = yes}, the same groups are additionally reduced level by level into \texttt{norms/level<N>/<group>.tsv}: a plain point average $L_2$, $L_\infty$, min, max, the point count, the number of points with $0 < |u| < 2^{-14}$ (binary16's minimum normal), and the binary16 admissibility ratio $\max_x\, q(|u|)/\max(|D_2 u|, \mathrm{floor})$ over the part of the level not covered by a finer level, where $q$ is the binary16 half-ulp at $|u|$, $D_2 u$ the undivided second difference along each axis formed in the group's storage type, and the floor is the curvature a signal of amplitude \texttt{out\_norm\_admiss\_amplitude} at radius \texttt{out\_norm\_admiss\_radius}, falling as $1/r$, would have on that level (a second column restricts the ratio to the shell of half-width \texttt{out\_norm\_admiss\_shell\_halfwidth} around that radius). Ghost zones are always excluded, and so are the points where the grid function \texttt{out\_norm\_mask\_var} is below \texttt{out\_norm\_mask\_below} (for example \texttt{chi} near a puncture). Rows are written every \texttt{out\_norm\_per\_level\_every} iterations and on the iteration just before each of those, so that a regrid is bracketed. The reductions run on the host over managed memory; leave them off in timing runs.
+
 For example, to output \texttt{openPMD} and norms for the \texttt{WaveToyX} thorn grid functions, the following excerpt could be added to a parameter file
 
 \begin{lstlisting}[language=bash]

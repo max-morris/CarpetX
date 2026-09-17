@@ -596,6 +596,56 @@ BOOLEAN out_norm_omit_sumloc_for_backward_compatibility "Omit sumloc norms" STEE
 {
 } no
 
+# Per-level norms (mixed-precision harness). For every group in out_norm_vars
+# and every refinement level, a plain point average L2, Linf, min, max, the
+# point count, the count of points with 0 < |u| below binary16's minimum
+# normal (6.1e-5), and the fp16 admissibility ratio q(|u|) / max(|D2u|,
+# floor) (q the fp16 half-ulp at |u|, D2u the undivided second difference
+# formed in the group's storage type, the floor the amplitude-scaled
+# curvature a signal of out_norm_admiss_amplitude at out_norm_admiss_radius
+# would have at the point's radius) are written to
+# <out_dir>/norms/level<N>/<group>.tsv. The norms cover each level's whole
+# interior (no ghosts); the admissibility ratio additionally excludes points
+# covered by a finer level. Both exclude points where out_norm_mask_var is
+# below out_norm_mask_below. Host-side loops over managed memory; turn off
+# in timing runs.
+BOOLEAN out_norm_per_level "Output per-level norms and the fp16 admissibility ratio of the out_norm_vars groups" STEERABLE=always
+{
+} no
+
+INT out_norm_per_level_every "Output per-level norms every that many iterations, and on the iteration just before each of those (so a regrid is bracketed)" STEERABLE=always
+{
+  -1 :: "use the effective value of out_norm_every"
+  0 :: "never output per-level norms"
+  1:* :: "every that many iterations"
+} -1
+
+STRING out_norm_mask_var "Full name of a grid function (e.g. CottonmouthZ4c4m::chi) whose points below out_norm_mask_below are excluded from the per-level norms; empty: no mask" STEERABLE=always
+{
+  "" :: "no mask"
+  ".*::.*" :: "a full variable name"
+} ""
+
+REAL out_norm_mask_below "Points where out_norm_mask_var is below this value are excluded from the per-level norms" STEERABLE=always
+{
+  *:* :: ""
+} 0.0
+
+REAL out_norm_admiss_amplitude "Amplitude of the reference signal for the admissibility floor (the QC0 gate's |Psi4| peak at the extraction radius)" STEERABLE=always
+{
+  (0:* :: ""
+} 6.05e-4
+
+REAL out_norm_admiss_radius "Radius at which the reference amplitude holds; the floor scales as 1/r away from it, and the shell statistic is taken around it" STEERABLE=always
+{
+  (0:* :: ""
+} 123.5
+
+REAL out_norm_admiss_shell_halfwidth "Half-width of the shell | |x| - out_norm_admiss_radius | < halfwidth over which the admiss_shell column is taken" STEERABLE=always
+{
+  (0:* :: ""
+} 10.0
+
 
 
 KEYWORD openpmd_format "openPMD file format" STEERABLE=always

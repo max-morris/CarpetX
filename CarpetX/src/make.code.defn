@@ -36,6 +36,7 @@ SRCS =							\
 	io_adios2.cxx					\
 	io_meta.cxx					\
 	io_norm.cxx					\
+	io_norm_per_level.cxx				\
 	io_openpmd.cxx					\
 	io_silo.cxx					\
 	io_tsv.cxx					\

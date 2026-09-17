@@ -137,6 +137,34 @@ MPI_Op reduction_mpi_op();
 // group's storage precision (see reduce_typed<MF> in reduction.cxx).
 reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl);
 
+// Per-level statistics of one variable (out_norm_per_level): plain point
+// averages over one refinement level's interior (no ghost zones), with the
+// fp16 admissibility ratio over the part of that interior not covered by a
+// finer level. See reduce_level in reduction.cxx.
+struct level_reduction_t {
+  CCTK_REAL sum2;         // sum of u^2 over the counted points
+  CCTK_REAL maxabs;       // max |u|
+  CCTK_REAL min, max;     // min and max of u
+  long long npoints;      // points counted (interior, mask applied)
+  long long nsubnormal16; // points with 0 < |u| < 2^-14 (fp16 min normal)
+  // Fine-masked pass: max over points of q(|u|) / max(|D2u|, floor), and
+  // the same restricted to the shell around out_norm_admiss_radius. -inf
+  // when no point contributed (written as NaN).
+  CCTK_REAL admiss, admiss_shell;
+  bool has_admiss; // false when the group has no ghost zones (no D2u)
+
+  CCTK_REAL norm2() const noexcept {
+    return npoints > 0 ? sqrt(sum2 / CCTK_REAL(npoints)) : CCTK_REAL(0);
+  }
+};
+
+// Reduce variable `vi` of grid function group `gi`, time level `tl`, on
+// refinement level `level` only, MPI-reduced across all processes.
+// `mask_vi` is the Cactus variable index of the mask variable, or -1 for no
+// mask; the mask threshold and the admissibility constants are read from
+// the out_norm_* parameters.
+level_reduction_t reduce_level(int gi, int vi, int tl, int level, int mask_vi);
+
 } // namespace CarpetX
 
 #endif // #ifndef CARPETX_CARPETX_REDUCTION_HXX

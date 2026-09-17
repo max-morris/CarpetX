@@ -561,6 +561,18 @@ int OutputGH(const cGH *restrict cctkGH) {
       OutputNorms(cctkGH);
   }
 
+  if (out_norm_per_level) {
+    // On every iteration `every` divides and on the one just before it, so
+    // that a regrid (every regrid_every iterations, which is what the
+    // parfile passes here) is bracketed by a before and an after row
+    const int norm_every = out_norm_every == -1 ? out_every : out_norm_every;
+    const int every =
+        out_norm_per_level_every == -1 ? norm_every : out_norm_per_level_every;
+    if (every > 0 && (cctk_iteration % every == 0 ||
+                      cctk_iteration % every == every - 1))
+      OutputNormsPerLevel(cctkGH);
+  }
+
   {
     const int every = out_adios2_every == -1 ? out_every : out_adios2_every;
     if (every > 0 && cctk_iteration % every == 0) {

@@ -8,8 +8,12 @@
 #include <AMReX_MultiFabUtil.H>
 #include <AMReX_Orientation.H>
 
+#include <algorithm>
 #include <bitset>
+#include <cmath>
 #include <cstdlib>
+#include <memory>
+#include <variant>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -264,6 +268,288 @@ reduction<CCTK_REAL, dim> reduce_typed(int gi, int vi, int tl) {
 }
 
 } // namespace
+
+////////////////////////////////////////////////////////////////////////////////
+// Per-level norms and fp16 admissibility (out_norm_per_level)
+
+namespace {
+
+// Thread-local accumulator; merged under a critical section (no custom
+// OpenMP reduction, unlike reduce_typed above).
+struct level_acc_t {
+  CCTK_REAL sum2 = 0;
+  CCTK_REAL maxabs = 0;
+  CCTK_REAL min = +1.0 / 0.0;
+  CCTK_REAL max = -1.0 / 0.0;
+  long long npoints = 0;
+  long long nsubnormal16 = 0;
+  CCTK_REAL admiss = -1.0 / 0.0;
+  CCTK_REAL admiss_shell = -1.0 / 0.0;
+
+  void merge(const level_acc_t &o) noexcept {
+    sum2 += o.sum2;
+    maxabs = std::max(maxabs, o.maxabs);
+    min = std::min(min, o.min);
+    max = std::max(max, o.max);
+    npoints += o.npoints;
+    nsubnormal16 += o.nsubnormal16;
+    admiss = std::max(admiss, o.admiss);
+    admiss_shell = std::max(admiss_shell, o.admiss_shell);
+  }
+};
+
+// binary16's minimum normal, 2^-14
+constexpr CCTK_REAL fp16_min_normal = 6.103515625e-5;
+
+// Half-ulp of binary16 at magnitude |u|: 2^(floor(log2 |u|) - 11) in the
+// normal range (10 fraction bits, so the ulp is 2^(e-10)), and half of the
+// subnormal spacing 2^-24 below it (also for u == 0).
+inline CCTK_REAL fp16_half_ulp(const CCTK_REAL absu) noexcept {
+  using std::ilogb, std::ldexp;
+  if (!(absu >= fp16_min_normal))
+    return ldexp(CCTK_REAL(1), -25);
+  return ldexp(CCTK_REAL(1), ilogb(absu) - 11);
+}
+
+// One box: pass 1 (norms over the interior, mask applied) and pass 2 (the
+// admissibility ratio over the interior points not covered by a finer
+// level, mask applied). `vars` and `mask` are the full arrays including
+// ghost zones; [tmin, tmax) is the tile, a subset of the interior. Values
+// are read in the storage type SrcT and converted to CCTK_REAL once per
+// point; D2u is formed in SrcT (three loads, two subtractions in the
+// storage type's own arithmetic) and converted afterwards, so the ratio
+// judges the stored data, not a widened copy of it.
+template <typename SrcT, typename MaskT>
+void reduce_level_box(level_acc_t &acc,
+                      const amrex::Array4<const SrcT> &restrict vars,
+                      const int n, const amrex::Array4<const MaskT> *mask,
+                      const CCTK_REAL mask_below, const vect<int, dim> &tmin,
+                      const vect<int, dim> &tmax,
+                      const amrex::Array4<const int> *restrict const finemask,
+                      const bool have_ghosts, const vect<CCTK_REAL, dim> &x0,
+                      const vect<CCTK_REAL, dim> &dx, const CCTK_REAL floor0,
+                      const CCTK_REAL shell_radius,
+                      const CCTK_REAL shell_halfwidth) {
+  using std::fabs, std::sqrt;
+  for (int k = tmin[2]; k < tmax[2]; ++k) {
+    for (int j = tmin[1]; j < tmax[1]; ++j) {
+      for (int i = tmin[0]; i < tmax[0]; ++i) {
+        if (mask && CCTK_REAL((*mask)(i, j, k)) < mask_below)
+          continue;
+
+        // Pass 1: norms
+        const CCTK_REAL u = CCTK_REAL(vars(i, j, k, n));
+        const CCTK_REAL absu = fabs(u);
+        acc.sum2 += u * u;
+        acc.maxabs = std::max(acc.maxabs, absu);
+        acc.min = std::min(acc.min, u);
+        acc.max = std::max(acc.max, u);
+        ++acc.npoints;
+        if (absu > 0 && absu < fp16_min_normal)
+          ++acc.nsubnormal16;
+
+        // Pass 2: admissibility, fine-masked
+        if (!have_ghosts)
+          continue;
+        if (finemask && (*finemask)(i, j, k))
+          continue;
+        const SrcT u0 = vars(i, j, k, n);
+        const SrcT d2x = (vars(i + 1, j, k, n) - u0) - (u0 - vars(i - 1, j, k, n));
+        const SrcT d2y = (vars(i, j + 1, k, n) - u0) - (u0 - vars(i, j - 1, k, n));
+        const SrcT d2z = (vars(i, j, k + 1, n) - u0) - (u0 - vars(i, j, k - 1, n));
+        const CCTK_REAL D2 = std::max(
+            {fabs(CCTK_REAL(d2x)), fabs(CCTK_REAL(d2y)), fabs(CCTK_REAL(d2z))});
+        const vect<int, dim> ipos = {i, j, k};
+        const vect<CCTK_REAL, dim> x = x0 + ipos * dx;
+        const CCTK_REAL r = sqrt(sum(x * x));
+        const CCTK_REAL floor = floor0 / std::max(r, CCTK_REAL(1));
+        const CCTK_REAL ratio = fp16_half_ulp(absu) / std::max(D2, floor);
+        acc.admiss = std::max(acc.admiss, ratio);
+        if (fabs(r - shell_radius) < shell_halfwidth)
+          acc.admiss_shell = std::max(acc.admiss_shell, ratio);
+      }
+    }
+  }
+}
+
+// One level of one patch, over every box, for a given source and mask
+// storage type (both dispatched through std::visit on AnyMultiFab).
+template <typename MF, typename MaskMF>
+void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
+                        const GHExt::PatchData::LevelData &leveldata,
+                        const GHExt::PatchData::LevelData::GroupData &groupdata,
+                        const MF &mfab, const int gi, const int vi,
+                        const int tl, const MaskMF *const mask_mfab,
+                        const CCTK_REAL mask_below, const CCTK_REAL floor0,
+                        const CCTK_REAL shell_radius,
+                        const CCTK_REAL shell_halfwidth) {
+  using SrcT = typename MF::value_type;
+  using MaskT = typename MaskMF::value_type;
+
+  const vect<int, dim> indextype = groupdata.indextype;
+  const bool have_ghosts = groupdata.nghostzones[0] >= 1 &&
+                           groupdata.nghostzones[1] >= 1 &&
+                           groupdata.nghostzones[2] >= 1;
+
+  const auto &restrict geom = patchdata.amrcore->Geom(leveldata.level);
+  const CCTK_REAL *restrict const x01 = geom.ProbLo();
+  const CCTK_REAL *restrict const dx1 = geom.CellSize();
+  const vect<CCTK_REAL, dim> dx = {dx1[0], dx1[1], dx1[2]};
+  const vect<CCTK_REAL, dim> x0v = {x01[0], x01[1], x01[2]};
+  const auto x0 = x0v + indextype * dx / 2;
+  // floor(l, x) = amplitude * (radius / max(|x|, 1)) * dx_l^2; the
+  // radius-dependent factor is applied per point in reduce_level_box.
+  const CCTK_REAL floor0_l = floor0 * dx[0] * dx[0];
+
+  std::unique_ptr<amrex::iMultiFab> finemask_imfab;
+  const int fine_level = leveldata.level + 1;
+  if (fine_level < int(patchdata.leveldata.size())) {
+    const auto &restrict fine_leveldata = patchdata.leveldata.at(fine_level);
+    const auto &restrict fine_groupdata = *fine_leveldata.groupdata.at(gi);
+    const MF &fine_mfab = std::get<MF>(*fine_groupdata.mfab.at(tl));
+    const amrex::IntVect reffact{2, 2, 2};
+    finemask_imfab = std::make_unique<amrex::iMultiFab>(
+        makeFineMask(mfab, fine_mfab.boxArray(), reffact, geom.periodicity(),
+                     /*coarse value*/ 0, /* fine value */ 1));
+  }
+
+  auto mfitinfo = amrex::MFItInfo().SetDynamic(true).EnableTiling();
+#pragma omp parallel
+  {
+    level_acc_t local;
+    for (amrex::MFIter mfi(mfab, mfitinfo); mfi.isValid(); ++mfi) {
+      const amrex::Box &bx = mfi.tilebox(); // current tile (without ghosts)
+      const vect<int, dim> tmin{bx.smallEnd(0), bx.smallEnd(1), bx.smallEnd(2)};
+      const vect<int, dim> tmax{bx.bigEnd(0) + 1, bx.bigEnd(1) + 1,
+                                bx.bigEnd(2) + 1};
+
+      const amrex::Array4<const SrcT> &vars = mfab.array(mfi);
+
+      std::unique_ptr<amrex::Array4<const int> > finemask;
+      if (finemask_imfab) {
+        finemask = std::make_unique<amrex::Array4<const int> >(
+            finemask_imfab->array(mfi));
+        assert(finemask->begin.x == vars.begin.x);
+        assert(finemask->begin.y == vars.begin.y);
+        assert(finemask->begin.z == vars.begin.z);
+        assert(finemask->end.x == vars.end.x);
+        assert(finemask->end.y == vars.end.y);
+        assert(finemask->end.z == vars.end.z);
+      }
+
+      std::unique_ptr<amrex::Array4<const MaskT> > mask;
+      if (mask_mfab)
+        mask = std::make_unique<amrex::Array4<const MaskT> >(
+            mask_mfab->array(mfi));
+
+      reduce_level_box<SrcT, MaskT>(local, vars, vi, mask.get(), mask_below,
+                                    tmin, tmax, finemask.get(), have_ghosts,
+                                    x0, dx, floor0_l, shell_radius,
+                                    shell_halfwidth);
+    }
+#pragma omp critical(CarpetX_reduce_level)
+    acc.merge(local);
+  }
+}
+
+} // namespace
+
+level_reduction_t reduce_level(const int gi, const int vi, const int tl,
+                               const int level, const int mask_vi) {
+  DECLARE_CCTK_PARAMETERS;
+
+  cGroup group;
+  int ierr = CCTK_GroupData(gi, &group);
+  assert(!ierr);
+  assert(group.grouptype == CCTK_GF);
+
+  int mask_gi = -1, mask_vi0 = -1;
+  if (mask_vi >= 0) {
+    mask_gi = CCTK_GroupIndexFromVarI(mask_vi);
+    mask_vi0 = mask_vi - CCTK_FirstVarIndexI(mask_gi);
+    assert(mask_gi >= 0 && mask_vi0 >= 0);
+  }
+
+  const CCTK_REAL floor0 = out_norm_admiss_amplitude * out_norm_admiss_radius;
+
+  level_acc_t acc;
+  bool have_ghosts = true;
+  for (const auto &restrict patchdata : ghext->patchdata) {
+    if (level >= int(patchdata.leveldata.size()))
+      continue;
+    const auto &restrict leveldata = patchdata.leveldata.at(level);
+    const auto &restrict groupdata = *leveldata.groupdata.at(gi);
+    have_ghosts = have_ghosts && groupdata.nghostzones[0] >= 1 &&
+                  groupdata.nghostzones[1] >= 1 && groupdata.nghostzones[2] >= 1;
+
+    warn_if_invalid(groupdata, vi, tl, make_valid_int(),
+                    []() { return "Before per-level reduction"; });
+
+    const GHExt::PatchData::LevelData::GroupData *mask_groupdata = nullptr;
+    if (mask_gi >= 0) {
+      mask_groupdata = leveldata.groupdata.at(mask_gi).get();
+      if (mask_groupdata->indextype != groupdata.indextype)
+        CCTK_VERROR("out_norm_mask_var %s has a different centering than the "
+                    "reduced group %s",
+                    CCTK_FullVarName(mask_vi), CCTK_FullGroupName(gi));
+      warn_if_invalid(*mask_groupdata, mask_vi0, tl, make_valid_int(),
+                      []() { return "Before per-level reduction (mask)"; });
+    }
+
+    std::visit(
+        [&](const auto &mfab) {
+          using MF = std::decay_t<decltype(mfab)>;
+          if (!mask_groupdata) {
+            // No mask: pass a null pointer of the source type
+            reduce_level_patch<MF, MF>(acc, patchdata, leveldata, groupdata,
+                                       mfab, gi, vi, tl, nullptr,
+                                       out_norm_mask_below, floor0,
+                                       out_norm_admiss_radius,
+                                       out_norm_admiss_shell_halfwidth);
+            return;
+          }
+          std::visit(
+              [&](const auto &mask_mfab) {
+                using MaskMF = std::decay_t<decltype(mask_mfab)>;
+                if (mask_mfab.boxArray() != mfab.boxArray() ||
+                    mask_mfab.DistributionMap() != mfab.DistributionMap())
+                  CCTK_VERROR("out_norm_mask_var %s is not laid out like the "
+                              "reduced group %s on level %d",
+                              CCTK_FullVarName(mask_vi), CCTK_FullGroupName(gi),
+                              level);
+                reduce_level_patch<MF, MaskMF>(
+                    acc, patchdata, leveldata, groupdata, mfab, gi, vi, tl,
+                    &mask_mfab, out_norm_mask_below, floor0,
+                    out_norm_admiss_radius, out_norm_admiss_shell_halfwidth);
+              },
+              *mask_groupdata->mfab.at(tl));
+        },
+        *groupdata.mfab.at(tl));
+  }
+
+  // MPI reduction: plain arrays, no custom datatype
+  CCTK_REAL sums[1] = {acc.sum2};
+  long long counts[2] = {acc.npoints, acc.nsubnormal16};
+  CCTK_REAL maxs[4] = {acc.maxabs, acc.max, acc.admiss, acc.admiss_shell};
+  CCTK_REAL mins[1] = {acc.min};
+  MPI_Allreduce(MPI_IN_PLACE, sums, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, counts, 2, MPI_LONG_LONG, MPI_SUM,
+                MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, maxs, 4, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, mins, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+
+  level_reduction_t red;
+  red.sum2 = sums[0];
+  red.maxabs = maxs[0];
+  red.min = mins[0];
+  red.max = maxs[1];
+  red.npoints = counts[0];
+  red.nsubnormal16 = counts[1];
+  red.admiss = maxs[2];
+  red.admiss_shell = maxs[3];
+  red.has_admiss = have_ghosts;
+  return red;
+}
 
 reduction<CCTK_REAL, dim> reduce(int gi, int vi, int tl) {
   DECLARE_CCTK_PARAMETERS;
