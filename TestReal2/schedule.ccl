@@ -31,6 +31,7 @@ STORAGE: state2_facey
 STORAGE: state2_facez
 STORAGE: state2_bc
 STORAGE: state2_evol rhs2_evol
+STORAGE: state2_evolv rhs2_evolv
 STORAGE: scalar2 array2
 
 SCHEDULE TestReal2_Initialize AT initial
@@ -44,6 +45,7 @@ SCHEDULE TestReal2_PostRecover_ReinitRHS AT post_recover_variables
 {
   LANG: C
   WRITES: rhs2_evol(interior)
+  WRITES: rhs2_evolv(interior)
 } "Re-zero-fill rhs2_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal2_PostRecover_Sync syncs it, for the same reason TestReal2_Evol_Initial zero-fills it at CCTK_INITIAL"
 
 SCHEDULE TestReal2_PostRecover_Sync AT post_recover_variables AFTER TestReal2_PostRecover_ReinitRHS
@@ -60,6 +62,7 @@ SCHEDULE TestReal2_PostRecover_Sync AT post_recover_variables AFTER TestReal2_Po
   SYNC: state2_facez
   SYNC: state2_bc
   SYNC: state2_evol rhs2_evol
+  SYNC: state2_evolv rhs2_evolv
 } "Re-sync every REAL2 test group's ghost zones and outer boundary after checkpoint recovery (which only restores each group's interior), for the same reason -- and covering the same unconditional set of groups -- as the postregrid/postrestrict Sync items below"
 
 if (run_periodic_test)
@@ -124,6 +127,7 @@ SCHEDULE TestReal2_2Lev_Sync AT postregrid
   SYNC: state2_facez
   SYNC: state2_bc
   SYNC: state2_evol
+  SYNC: state2_evolv
 } "Sync all REAL2 test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level. rhs2_evol is deliberately excluded: it is a TAGS='checkpoint=\"no\"' scratch group that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing it here would trip the sync precondition on its invalid new-level interior; it is recomputed every ODESolvers RHS evaluation and never needs to survive a regrid/restrict"
 
 SCHEDULE TestReal2_2Lev_Sync AT postrestrict
@@ -139,6 +143,7 @@ SCHEDULE TestReal2_2Lev_Sync AT postrestrict
   SYNC: state2_facez
   SYNC: state2_bc
   SYNC: state2_evol
+  SYNC: state2_evolv
 } "Sync all REAL2 test groups after restriction, for the same reason as the postregrid item above (rhs2_evol excluded for the same reason)"
 
 if (run_2lev_test)
@@ -202,6 +207,8 @@ SCHEDULE TestReal2_Evol_Initial AT initial
   LANG: C
   WRITES: state2_evol(everywhere)
   WRITES: rhs2_evol(everywhere)
+  WRITES: state2_evolv(everywhere)
+  WRITES: rhs2_evolv(everywhere)
 } "Initialize the REAL2 exponential-decay ODE state to u0 (and its rhs group to 0, so that storage CarpetX always grants is always validly written)"
 
 if (run_evol_test)
@@ -211,6 +218,7 @@ if (run_evol_test)
     LANG: C
     OPTIONS: global
     SYNC: state2_evol
+    SYNC: state2_evolv
   } "Synchronize the REAL2 ODE state after each ODESolvers (sub)step"
 
   SCHEDULE TestReal2_Evol_RHS IN ODESolvers_RHS
@@ -218,12 +226,15 @@ if (run_evol_test)
     LANG: C
     READS: state2_evol(everywhere)
     WRITES: rhs2_evol(everywhere)
+    READS: state2_evolv(everywhere)
+    WRITES: rhs2_evolv(everywhere)
   } "Calculate RHS = -decay_rate * state in REAL2"
 
   SCHEDULE TestReal2_Evol_Check AT poststep
   {
     LANG: C
     READS: state2_evol(everywhere)
+    READS: state2_evolv(everywhere)
   } "Check the evolved REAL2 state against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
 }
 

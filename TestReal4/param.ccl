@@ -79,6 +79,22 @@ CCTK_REAL4 check_tolerance4 "Pass/fail tolerance for state4::u4 in the periodic 
   (0:1] :: "any positive tolerance, at most 1"
 } 1.0e-6
 
+# Relative tolerances of the evolution smoke test (TestReal4_Evol_Check).
+# The defaults are the values that used to be hard-coded, sized for
+# par/testreal4_evol.par (dtfac = 0.001, 50 RK4 steps). A perf parfile at
+# dtfac = 0.5 over 250 steps carries an RK4 truncation error of about 2e-12
+# and must loosen them (the kit's perf2 parfiles use 1e-10 and 1e-4); there
+# the PASS is a finiteness check, not a precision gate.
+CCTK_REAL8 evol_tolerance8 "Pass/fail relative tolerance for state8_evol/state8_evolv in the evolution smoke test"
+{
+  (0:1] :: "any positive tolerance, at most 1"
+} 1.0e-12
+
+CCTK_REAL4 evol_tolerance4 "Pass/fail relative tolerance for state4_evol/state4_evolv in the evolution smoke test"
+{
+  (0:1] :: "any positive tolerance, at most 1"
+} 1.0e-5
+
 # Needed by the check_this_iteration() helper (src/testreal4_check_every.hxx)
 # so a throttled self-check still always runs at the final iteration.
 SHARES: Cactus

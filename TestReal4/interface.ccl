@@ -202,6 +202,37 @@ CCTK_REAL4 rhs4_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
   r4_evol
 } "RHS of state4_evol"
 
+# Vertex-centered twins of the evolved pairs above (default centering, like
+# state8/state4). The cell-centered pairs take CarpetX's conservative
+# prolongation and arithmetic average_down under prolongation_type = "ddf",
+# kernels no vertex-centered physics group ever runs; these twins put the
+# same ODE through the vertex-centered POLY prolongation and the nodal
+# injection restriction, so a perf parfile with the evolution test on
+# profiles the kernels a Z4c evolution actually exercises. They carry no
+# dirichlet_values tag, so under a dirichlet outer boundary the driver fills
+# their boundary points with zero; the checks exclude those points
+# (`any(p.NI != 0)`), as the two-level test does.
+
+CCTK_REAL8 state8_evolv TYPE=gf TAGS='rhs="TestReal4::rhs8_evolv"'
+{
+  u8_evolv
+} "REAL8 exponential-decay ODE state, vertex-centered twin of state8_evol"
+
+CCTK_REAL8 rhs8_evolv TYPE=gf TAGS='checkpoint="no"'
+{
+  r8_evolv
+} "RHS of state8_evolv"
+
+CCTK_REAL4 state4_evolv TYPE=gf TAGS='rhs="TestReal4::rhs4_evolv"'
+{
+  u4_evolv
+} "REAL4 exponential-decay ODE state, vertex-centered twin of state4_evol"
+
+CCTK_REAL4 rhs4_evolv TYPE=gf TAGS='checkpoint="no"'
+{
+  r4_evolv
+} "RHS of state4_evolv"
+
 
 
 # =============================================================================

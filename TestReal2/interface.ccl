@@ -120,6 +120,19 @@ CCTK_REAL2 rhs2_evol TYPE=gf CENTERING={CCC} TAGS='checkpoint="no"'
   r2_evol
 } "RHS of state2_evol"
 
+# Vertex-centered twin of the pair above (see TestReal4's interface.ccl for
+# why: it is the vertex-centered POLY prolongation and nodal injection the
+# perf parfiles need to profile, not the cell-centered conservative pair).
+CCTK_REAL2 state2_evolv TYPE=gf TAGS='rhs="TestReal2::rhs2_evolv"'
+{
+  u2_evolv
+} "REAL2 exponential-decay ODE state, vertex-centered twin of state2_evol"
+
+CCTK_REAL2 rhs2_evolv TYPE=gf TAGS='checkpoint="no"'
+{
+  r2_evolv
+} "RHS of state2_evolv"
+
 
 
 # =============================================================================

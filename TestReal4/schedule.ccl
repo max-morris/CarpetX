@@ -39,6 +39,7 @@ STORAGE: state8_facey state4_facey
 STORAGE: state8_facez state4_facez
 STORAGE: state8_bc state4_bc
 STORAGE: state8_evol rhs8_evol state4_evol rhs4_evol
+STORAGE: state8_evolv rhs8_evolv state4_evolv rhs4_evolv
 STORAGE: scalar8 scalar4 array8 array4
 
 SCHEDULE TestReal4_Initialize AT initial
@@ -54,6 +55,8 @@ SCHEDULE TestReal4_PostRecover_ReinitRHS AT post_recover_variables
   LANG: C
   WRITES: rhs8_evol(interior)
   WRITES: rhs4_evol(interior)
+  WRITES: rhs8_evolv(interior)
+  WRITES: rhs4_evolv(interior)
 } "Re-zero-fill rhs8_evol/rhs4_evol (TAGS='checkpoint=\"no\"', so never read back by recovery) before TestReal4_PostRecover_Sync syncs them, for the same reason TestReal4_Evol_Initial zero-fills them at CCTK_INITIAL"
 
 SCHEDULE TestReal4_PostRecover_Sync AT post_recover_variables AFTER TestReal4_PostRecover_ReinitRHS
@@ -70,6 +73,7 @@ SCHEDULE TestReal4_PostRecover_Sync AT post_recover_variables AFTER TestReal4_Po
   SYNC: state8_facez state4_facez
   SYNC: state8_bc state4_bc
   SYNC: state8_evol rhs8_evol state4_evol rhs4_evol
+  SYNC: state8_evolv rhs8_evolv state4_evolv rhs4_evolv
 } "Re-sync every test group's ghost zones and outer boundary after checkpoint recovery (which only restores each group's interior), for the same reason -- and covering the same unconditional set of groups -- as the postregrid/postrestrict Sync items below"
 
 if (run_periodic_test)
@@ -149,6 +153,7 @@ SCHEDULE TestReal4_2Lev_Sync AT postregrid
   SYNC: state8_facez state4_facez
   SYNC: state8_bc state4_bc
   SYNC: state8_evol state4_evol
+  SYNC: state8_evolv state4_evolv
 } "Sync all test groups after regridding: fills newly-created/changed fine-level interior and all ghost zones (including coarse-fine ghosts) by prolongation from the coarse level, keeping every group (not just the one(s) the active parfile is testing) validly written. rhs8_evol/rhs4_evol are deliberately excluded: they are TAGS='checkpoint=\"no\"' scratch groups that CarpetX never prolongates onto a new level (driver.cxx's prolongate_tl is 0 for non-checkpointed groups), so syncing them here would trip the sync precondition on their invalid new-level interior; they are recomputed every ODESolvers RHS evaluation and never need to survive a regrid/restrict"
 
 SCHEDULE TestReal4_2Lev_Sync AT postrestrict
@@ -164,6 +169,7 @@ SCHEDULE TestReal4_2Lev_Sync AT postrestrict
   SYNC: state8_facez state4_facez
   SYNC: state8_bc state4_bc
   SYNC: state8_evol state4_evol
+  SYNC: state8_evolv state4_evolv
 } "Sync all test groups after restriction, for the same reason as the postregrid item above (rhs8_evol/rhs4_evol excluded for the same reason)"
 
 if (run_2lev_test)
@@ -237,6 +243,10 @@ SCHEDULE TestReal4_Evol_Initial AT initial
   WRITES: state4_evol(everywhere)
   WRITES: rhs8_evol(everywhere)
   WRITES: rhs4_evol(everywhere)
+  WRITES: state8_evolv(everywhere)
+  WRITES: state4_evolv(everywhere)
+  WRITES: rhs8_evolv(everywhere)
+  WRITES: rhs4_evolv(everywhere)
 } "Initialize the REAL4 and REAL8 exponential-decay ODE states to u0 (and their rhs groups to 0, so that storage CarpetX always grants is always validly written)"
 
 if (run_evol_test)
@@ -246,6 +256,7 @@ if (run_evol_test)
     LANG: C
     OPTIONS: global
     SYNC: state8_evol state4_evol
+    SYNC: state8_evolv state4_evolv
   } "Synchronize the ODE states after each ODESolvers (sub)step"
 
   SCHEDULE TestReal4_Evol_RHS IN ODESolvers_RHS
@@ -253,6 +264,8 @@ if (run_evol_test)
     LANG: C
     READS: state8_evol(everywhere), state4_evol(everywhere)
     WRITES: rhs8_evol(everywhere), rhs4_evol(everywhere)
+    READS: state8_evolv(everywhere), state4_evolv(everywhere)
+    WRITES: rhs8_evolv(everywhere), rhs4_evolv(everywhere)
   } "Calculate RHS = -decay_rate * state for both precisions"
 
   SCHEDULE TestReal4_Evol_Check AT poststep
@@ -260,6 +273,8 @@ if (run_evol_test)
     LANG: C
     READS: state8_evol(everywhere)
     READS: state4_evol(everywhere)
+    READS: state8_evolv(everywhere)
+    READS: state4_evolv(everywhere)
   } "Check the evolved REAL4 and REAL8 states against the analytic exponential-decay solution u(t) = u0 exp(-decay_rate t)"
 }
 

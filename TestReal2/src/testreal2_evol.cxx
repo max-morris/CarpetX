@@ -14,11 +14,19 @@
 // (each (state, rhs) pair keeps its own element type throughout the
 // lincomb/combine_valids kernels).
 //
-// The REAL2 tolerance below (~5e-3 relative) is dominated by binary16
-// rounding accumulated over dtfac^-1 RK4 steps, each of which rounds its
-// state to binary16 -- notably looser than the periodic/2lev/bc tests'
-// REAL2 tolerances because this is the one REAL2 test where rounding error
-// actually *accumulates* step over step rather than being applied once.
+// The REAL2 tolerance (the evol_tolerance2 parameter, default ~5e-3
+// relative) is dominated by binary16 rounding accumulated over dtfac^-1
+// RK4 steps, each of which rounds its state to binary16 -- notably looser
+// than the periodic/2lev/bc tests' REAL2 tolerances because this is the one
+// REAL2 test where rounding error actually *accumulates* step over step
+// rather than being applied once; a perf parfile at dtfac = 0.5 over
+// hundreds of steps sets it to 0.1.
+//
+// As in TestReal4, the cell-centered pair state2_evol/rhs2_evol has a
+// vertex-centered twin state2_evolv/rhs2_evolv, so the perf parfiles
+// profile the vertex-centered POLY prolongation and nodal injection at
+// binary16; outer-boundary points are excluded from the checks
+// (`any(p.NI != 0)`) for the reason given in testreal4_evol.cxx.
 
 #include "testreal2_check_every.hxx"
 #include "testreal2_requires_real2.hxx"
@@ -38,6 +46,13 @@ extern "C" void TestReal2_Evol_Initial(CCTK_ARGUMENTS) {
   DECLARE_CCTK_PARAMETERS;
 
   const CCTK_REAL2 u0_2 = CCTK_REAL2(evol_u0);
+
+  grid.loop_all_device<0, 0, 0>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        u2_evolv(p.I) = u0_2;
+        r2_evolv(p.I) = CCTK_REAL2(0);
+      });
 
   grid.loop_all_device<1, 1, 1>(
       grid.nghostzones,
@@ -74,6 +89,12 @@ extern "C" void TestReal2_PostRecover_ReinitRHS(CCTK_ARGUMENTS) {
   // TestReal2_Evol_Initial above, so that TestReal2_PostRecover_Sync's
   // SYNC of this group (schedule.ccl, AT post_recover_variables) has a
   // validly-written interior to work from.
+  grid.loop_int_device<0, 0, 0>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        r2_evolv(p.I) = CCTK_REAL2(0);
+      });
+
   grid.loop_int_device<1, 1, 1>(
       grid.nghostzones,
       [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
@@ -96,6 +117,12 @@ extern "C" void TestReal2_Evol_RHS(CCTK_ARGUMENTS) {
         // here -- see testreal2.cxx's analytic2 comment.
         r2_evol(p.I) = -lambda2 * u2_evol(p.I);
       });
+
+  grid.loop_all_device<0, 0, 0>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        r2_evolv(p.I) = -lambda2 * u2_evolv(p.I);
+      });
 }
 
 extern "C" void TestReal2_Evol_Check(CCTK_ARGUMENTS) {
@@ -116,29 +143,45 @@ extern "C" void TestReal2_Evol_Check(CCTK_ARGUMENTS) {
   const CCTK_REAL8 exact2 =
       CCTK_REAL8(evol_u0) * exp(-CCTK_REAL8(evol_decay_rate) * cctk_time);
 
-  constexpr CCTK_REAL8 tolerance2 = 5.0e-3;
+  const CCTK_REAL8 tolerance2 = evol_tolerance2;
+  const CCTK_REAL8 scale2 = abs(exact2) > 0 ? abs(exact2) : CCTK_REAL8(1);
 
-  int n_checked = 0;
-
-  grid.loop_all<1, 1, 1>(grid.nghostzones, [&](const Loop::PointDesc &p) {
-    // have2 is widened to double before any arithmetic/abs, exactly like
-    // exact2 above -- never a bare CCTK_REAL2 std:: call.
-    const CCTK_REAL8 have2 = double(u2_evol(p.I));
-    const CCTK_REAL8 scale2 = abs(exact2) > 0 ? abs(exact2) : CCTK_REAL8(1);
+  // have2 is widened to double before any arithmetic/abs, exactly like
+  // exact2 above -- never a bare CCTK_REAL2 std:: call.
+  const auto check2 = [&](const CCTK_REAL8 have2, const char *const name) {
     const CCTK_REAL8 relerr2 = abs(have2 - exact2) / scale2;
     if (relerr2 > tolerance2)
-      CCTK_VERROR(
-          "TestReal2-evol: state2_evol::u2_evol mismatch at t=%.9g: have "
-          "%.9g, expected %.9g, relative error %.9g (tolerance %.9g)",
-          double(cctk_time), double(have2), double(exact2), double(relerr2),
-          double(tolerance2));
+      CCTK_VERROR("TestReal2-evol: %s mismatch at t=%.9g: have %.9g, "
+                  "expected %.9g, relative error %.9g (tolerance %.9g)",
+                  name, double(cctk_time), double(have2), double(exact2),
+                  double(relerr2), double(tolerance2));
+  };
 
+  int n_checked = 0;
+  int n_checked_v = 0;
+
+  grid.loop_all<1, 1, 1>(grid.nghostzones, [&](const Loop::PointDesc &p) {
+    // Outer-boundary points carry the driver's zero fill under a dirichlet
+    // boundary (no dirichlet_values tag), not the ODE solution.
+    if (any(p.NI != 0))
+      return;
+    check2(double(u2_evol(p.I)), "state2_evol::u2_evol");
     ++n_checked;
+  });
+
+  grid.loop_all<0, 0, 0>(grid.nghostzones, [&](const Loop::PointDesc &p) {
+    if (any(p.NI != 0))
+      return;
+    check2(double(u2_evolv(p.I)), "state2_evolv::u2_evolv");
+    ++n_checked_v;
   });
 
   CCTK_VINFO("TestReal2-evol[state2_evol]: PASS (%d points checked, t=%.6g, "
              "state2=%.7g)",
              n_checked, double(cctk_time), double(exact2));
+  CCTK_VINFO("TestReal2-evol[state2_evolv]: PASS (%d points checked, t=%.6g, "
+             "state2=%.7g)",
+             n_checked_v, double(cctk_time), double(exact2));
 }
 
 } // namespace TestReal2

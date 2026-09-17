@@ -17,10 +17,23 @@
 // The RK4 time truncation error and the CCTK_REAL4 rounding error are the
 // dominant error sources here (not exactly zero, unlike the polynomial
 // prolongation test), so the checks below use tolerances appropriate for a
-// converged, but not bitwise-exact, numerical integration: double ~1e-12
-// (par/testreal4_evol.par uses a small enough CarpetX::dtfac that the
-// O(dt^4) RK4 truncation error stays well below this) and float ~1e-5
-// relative (dominated by CCTK_REAL4 rounding, not by truncation error).
+// converged, but not bitwise-exact, numerical integration, read from the
+// evol_tolerance8/evol_tolerance4 parameters: their defaults are double
+// ~1e-12 (par/testreal4_evol.par uses a small enough CarpetX::dtfac that
+// the O(dt^4) RK4 truncation error stays well below this) and float ~1e-5
+// relative (dominated by CCTK_REAL4 rounding, not by truncation error); a
+// perf parfile at dtfac = 0.5 over hundreds of steps loosens both.
+//
+// Each precision evolves two pairs: the cell-centered state*_evol/rhs*_evol
+// and the vertex-centered twin state*_evolv/rhs*_evolv (default centering).
+// Under CarpetX::prolongation_type = "ddf" the two centerings take
+// different prolongation and restriction kernels, and it is the
+// vertex-centered ones (POLY prolongation, nodal injection) that a Z4c
+// evolution runs, so the perf parfiles profile the twins. Points on the
+// outer physical boundary are excluded from the checks (`any(p.NI != 0)`,
+// as in testreal4_2lev.cxx): under a dirichlet outer boundary the driver
+// fills them with zero, since the evolved groups carry no dirichlet_values
+// tag, and the ODE's interior solution says nothing about them.
 
 #include "testreal4_check_every.hxx"
 
@@ -40,6 +53,15 @@ extern "C" void TestReal4_Evol_Initial(CCTK_ARGUMENTS) {
 
   const CCTK_REAL8 u0_8 = evol_u0;
   const CCTK_REAL4 u0_4 = CCTK_REAL4(evol_u0);
+
+  grid.loop_all_device<0, 0, 0>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        u8_evolv(p.I) = u0_8;
+        u4_evolv(p.I) = u0_4;
+        r8_evolv(p.I) = CCTK_REAL8(0);
+        r4_evolv(p.I) = CCTK_REAL4(0);
+      });
 
   grid.loop_all_device<1, 1, 1>(
       grid.nghostzones,
@@ -80,6 +102,13 @@ extern "C" void TestReal4_PostRecover_ReinitRHS(CCTK_ARGUMENTS) {
   // TestReal4_Evol_Initial above, so that TestReal4_PostRecover_Sync's
   // SYNC of these groups (schedule.ccl, AT post_recover_variables) has a
   // validly-written interior to work from.
+  grid.loop_int_device<0, 0, 0>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        r8_evolv(p.I) = CCTK_REAL8(0);
+        r4_evolv(p.I) = CCTK_REAL4(0);
+      });
+
   grid.loop_int_device<1, 1, 1>(
       grid.nghostzones,
       [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
@@ -94,6 +123,13 @@ extern "C" void TestReal4_Evol_RHS(CCTK_ARGUMENTS) {
 
   const CCTK_REAL8 lambda8 = evol_decay_rate;
   const CCTK_REAL4 lambda4 = CCTK_REAL4(evol_decay_rate);
+
+  grid.loop_all_device<0, 0, 0>(
+      grid.nghostzones,
+      [=] CCTK_DEVICE(const Loop::PointDesc &p) CCTK_ATTRIBUTE_ALWAYS_INLINE {
+        r8_evolv(p.I) = -lambda8 * u8_evolv(p.I);
+        r4_evolv(p.I) = -lambda4 * u4_evolv(p.I);
+      });
 
   grid.loop_all_device<1, 1, 1>(
       grid.nghostzones,
@@ -118,33 +154,50 @@ extern "C" void TestReal4_Evol_Check(CCTK_ARGUMENTS) {
                             exp(-CCTK_REAL4(evol_decay_rate) *
                                 CCTK_REAL4(cctk_time));
 
-  constexpr CCTK_REAL8 tolerance8 = 1.0e-12;
-  constexpr CCTK_REAL4 tolerance4 = 1.0e-5f;
+  const CCTK_REAL8 tolerance8 = evol_tolerance8;
+  const CCTK_REAL4 tolerance4 = evol_tolerance4;
 
-  int n_checked = 0;
+  const CCTK_REAL8 scale8 = abs(exact8) > 0 ? abs(exact8) : CCTK_REAL8(1);
+  const CCTK_REAL4 scale4 = abs(exact4) > 0 ? abs(exact4) : CCTK_REAL4(1);
 
-  grid.loop_all<1, 1, 1>(grid.nghostzones, [&](const Loop::PointDesc &p) {
-    const CCTK_REAL8 have8 = u8_evol(p.I);
-    const CCTK_REAL8 scale8 = abs(exact8) > 0 ? abs(exact8) : CCTK_REAL8(1);
+  // One check for both centerings: `have` is the evolved value, `name` the
+  // group it came from (for the error message).
+  const auto check8 = [&](const CCTK_REAL8 have8, const char *const name) {
     const CCTK_REAL8 relerr8 = abs(have8 - exact8) / scale8;
     if (relerr8 > tolerance8)
-      CCTK_VERROR(
-          "TestReal4-evol: state8_evol::u8_evol mismatch at t=%.17g: have "
-          "%.17g, expected %.17g, relative error %.17g (tolerance %.17g)",
-          double(cctk_time), double(have8), double(exact8), double(relerr8),
-          double(tolerance8));
-
-    const CCTK_REAL4 have4 = u4_evol(p.I);
-    const CCTK_REAL4 scale4 = abs(exact4) > 0 ? abs(exact4) : CCTK_REAL4(1);
+      CCTK_VERROR("TestReal4-evol: %s mismatch at t=%.17g: have %.17g, "
+                  "expected %.17g, relative error %.17g (tolerance %.17g)",
+                  name, double(cctk_time), double(have8), double(exact8),
+                  double(relerr8), double(tolerance8));
+  };
+  const auto check4 = [&](const CCTK_REAL4 have4, const char *const name) {
     const CCTK_REAL4 relerr4 = abs(have4 - exact4) / scale4;
     if (relerr4 > tolerance4)
-      CCTK_VERROR(
-          "TestReal4-evol: state4_evol::u4_evol mismatch at t=%.9g: have "
-          "%.9g, expected %.9g, relative error %.9g (tolerance %.9g)",
-          double(cctk_time), double(have4), double(exact4), double(relerr4),
-          double(tolerance4));
+      CCTK_VERROR("TestReal4-evol: %s mismatch at t=%.9g: have %.9g, "
+                  "expected %.9g, relative error %.9g (tolerance %.9g)",
+                  name, double(cctk_time), double(have4), double(exact4),
+                  double(relerr4), double(tolerance4));
+  };
 
+  int n_checked = 0;
+  int n_checked_v = 0;
+
+  grid.loop_all<1, 1, 1>(grid.nghostzones, [&](const Loop::PointDesc &p) {
+    // Outer-boundary points carry the driver's zero fill under a dirichlet
+    // boundary (no dirichlet_values tag), not the ODE solution.
+    if (any(p.NI != 0))
+      return;
+    check8(u8_evol(p.I), "state8_evol::u8_evol");
+    check4(u4_evol(p.I), "state4_evol::u4_evol");
     ++n_checked;
+  });
+
+  grid.loop_all<0, 0, 0>(grid.nghostzones, [&](const Loop::PointDesc &p) {
+    if (any(p.NI != 0))
+      return;
+    check8(u8_evolv(p.I), "state8_evolv::u8_evolv");
+    check4(u4_evolv(p.I), "state4_evolv::u4_evolv");
+    ++n_checked_v;
   });
 
   CCTK_VINFO("TestReal4-evol[state8_evol]: PASS (%d points checked, t=%.6g, "
@@ -153,6 +206,12 @@ extern "C" void TestReal4_Evol_Check(CCTK_ARGUMENTS) {
   CCTK_VINFO("TestReal4-evol[state4_evol]: PASS (%d points checked, t=%.6g, "
              "state4=%.7g)",
              n_checked, double(cctk_time), double(exact4));
+  CCTK_VINFO("TestReal4-evol[state8_evolv]: PASS (%d points checked, t=%.6g, "
+             "state8=%.15g)",
+             n_checked_v, double(cctk_time), double(exact8));
+  CCTK_VINFO("TestReal4-evol[state4_evolv]: PASS (%d points checked, t=%.6g, "
+             "state4=%.7g)",
+             n_checked_v, double(cctk_time), double(exact4));
 }
 
 } // namespace TestReal4

@@ -29,6 +29,17 @@ CCTK_REAL2 check_tolerance2 "Pass/fail tolerance for state2::u2 in the periodic 
   (0:1] :: "any positive tolerance, at most 1"
 } 0.00390625
 
+# Relative tolerance of the REAL2 evolution smoke test (TestReal2_Evol_Check).
+# Compared in double after widening, so this is a CCTK_REAL8 like the
+# reference value it bounds. The default is the value that used to be
+# hard-coded, sized for par/testreal2_evol.par (dtfac = 0.001, 50 RK4
+# steps); at dtfac = 0.5 over 100-250 steps binary16 drifts by 2-3e-2 and a
+# perf parfile sets 0.1 (the PASS is then a finiteness check).
+CCTK_REAL8 evol_tolerance2 "Pass/fail relative tolerance for state2_evol/state2_evolv in the evolution smoke test"
+{
+  (0:1] :: "any positive tolerance, at most 1"
+} 5.0e-3
+
 SHARES: TestReal4
 
 # Which of the suite's tests to run, and the evolution test's parameters:
