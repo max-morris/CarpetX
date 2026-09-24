@@ -395,16 +395,13 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
                         const MF &mfab, const int gi, const int vi,
                         const int tl, const MaskMF *const mask_mfab,
                         const int mask_n, const CCTK_REAL mask_below,
-                        const CCTK_REAL floor0,
+                        const bool have_ghosts, const CCTK_REAL floor0,
                         const CCTK_REAL shell_radius,
                         const CCTK_REAL shell_halfwidth) {
   using SrcT = typename MF::value_type;
   using MaskT = typename MaskMF::value_type;
 
   const vect<int, dim> indextype = groupdata.indextype;
-  const bool have_ghosts = groupdata.nghostzones[0] >= 1 &&
-                           groupdata.nghostzones[1] >= 1 &&
-                           groupdata.nghostzones[2] >= 1;
 
   const auto &restrict geom = patchdata.amrcore->Geom(leveldata.level);
   const CCTK_REAL *restrict const x01 = geom.ProbLo();
@@ -494,19 +491,31 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
   const CCTK_REAL floor0 = out_norm_admiss_amplitude * out_norm_admiss_radius;
 
   level_acc_t acc;
+  // The admissibility pass reads one point into the ghost and outer
+  // boundary layers. It runs only when the group has ghost zones and those
+  // layers are valid on every patch; otherwise only the norms pass runs and
+  // the admissibility columns read NaN. Decided silently: groups written
+  // interior-only with no SYNC (the constraint groups the gate reads) are
+  // the normal case, not a warning.
   bool have_ghosts = true;
+  for (const auto &restrict patchdata : ghext->patchdata) {
+    if (level >= int(patchdata.leveldata.size()))
+      continue;
+    const auto &restrict groupdata =
+        *patchdata.leveldata.at(level).groupdata.at(gi);
+    const valid_t have = groupdata.valid.at(tl).at(vi).get();
+    have_ghosts = have_ghosts && groupdata.nghostzones[0] >= 1 &&
+                  groupdata.nghostzones[1] >= 1 &&
+                  groupdata.nghostzones[2] >= 1 && have.valid_outer &&
+                  have.valid_ghosts;
+  }
   for (const auto &restrict patchdata : ghext->patchdata) {
     if (level >= int(patchdata.leveldata.size()))
       continue;
     const auto &restrict leveldata = patchdata.leveldata.at(level);
     const auto &restrict groupdata = *leveldata.groupdata.at(gi);
-    have_ghosts = have_ghosts && groupdata.nghostzones[0] >= 1 &&
-                  groupdata.nghostzones[1] >= 1 && groupdata.nghostzones[2] >= 1;
 
-    // The admissibility pass reads one point into the ghost and outer
-    // boundary layers, so those must be valid too when it runs.
-    warn_if_invalid(groupdata, vi, tl,
-                    have_ghosts ? make_valid_all() : make_valid_int(),
+    warn_if_invalid(groupdata, vi, tl, make_valid_int(),
                     []() { return "Before per-level reduction"; });
 
     const GHExt::PatchData::LevelData::GroupData *mask_groupdata = nullptr;
@@ -535,7 +544,7 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
             // No mask: pass a null pointer of the source type
             reduce_level_patch<MF, MF>(acc, patchdata, leveldata, groupdata,
                                        mfab, gi, vi, tl, nullptr, 0,
-                                       out_norm_mask_below, floor0,
+                                       out_norm_mask_below, have_ghosts, floor0,
                                        out_norm_admiss_radius,
                                        out_norm_admiss_shell_halfwidth);
             return;
@@ -551,7 +560,8 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
                               level);
                 reduce_level_patch<MF, MaskMF>(
                     acc, patchdata, leveldata, groupdata, mfab, gi, vi, tl,
-                    &mask_mfab, mask_vi0, out_norm_mask_below, floor0,
+                    &mask_mfab, mask_vi0, out_norm_mask_below, have_ghosts,
+                    floor0,
                     out_norm_admiss_radius, out_norm_admiss_shell_halfwidth);
               },
               *mask_groupdata->mfab.at(tl));
