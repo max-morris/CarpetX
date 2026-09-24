@@ -14,9 +14,11 @@
 #include <cstdlib>
 #include <memory>
 #include <variant>
+#include <set>
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace CarpetX {
@@ -200,12 +202,16 @@ reduction<CCTK_REAL, dim> reduce_typed(int gi, int vi, int tl) {
         const auto &restrict fine_leveldata =
             patchdata.leveldata.at(fine_level);
         const auto &restrict fine_groupdata = *fine_leveldata.groupdata.at(gi);
-        const MF &fine_mfab = std::get<MF>(*fine_groupdata.mfab.at(tl));
+        // Only the box array is needed; the fine level may hold another
+        // storage type than this one
+        const amrex::BoxArray fine_ba = std::visit(
+            [](const auto &fine_mfab) { return fine_mfab.boxArray(); },
+            *fine_groupdata.mfab.at(tl));
 
         const amrex::IntVect reffact{2, 2, 2};
 
         finemask_imfab = std::make_unique<amrex::iMultiFab>(makeFineMask(
-            mfab, fine_mfab.boxArray(), reffact, geom.periodicity(),
+            mfab, fine_ba, reffact, geom.periodicity(),
             /*coarse value*/ 0, /* fine value */ 1));
       }
 
@@ -285,6 +291,7 @@ struct level_acc_t {
   long long nsubnormal16 = 0;
   CCTK_REAL admiss = -1.0 / 0.0;
   CCTK_REAL admiss_shell = -1.0 / 0.0;
+  long long nnan = 0; // ratios that were NaN (stale ghost, poison); reported as NaN
 
   void merge(const level_acc_t &o) noexcept {
     sum2 += o.sum2;
@@ -295,6 +302,7 @@ struct level_acc_t {
     nsubnormal16 += o.nsubnormal16;
     admiss = std::max(admiss, o.admiss);
     admiss_shell = std::max(admiss_shell, o.admiss_shell);
+    nnan += o.nnan;
   }
 };
 
@@ -323,7 +331,8 @@ template <typename SrcT, typename MaskT>
 void reduce_level_box(level_acc_t &acc,
                       const amrex::Array4<const SrcT> &restrict vars,
                       const int n, const amrex::Array4<const MaskT> *mask,
-                      const CCTK_REAL mask_below, const vect<int, dim> &tmin,
+                      const int mask_n, const CCTK_REAL mask_below,
+                      const vect<int, dim> &tmin,
                       const vect<int, dim> &tmax,
                       const amrex::Array4<const int> *restrict const finemask,
                       const bool have_ghosts, const vect<CCTK_REAL, dim> &x0,
@@ -334,7 +343,7 @@ void reduce_level_box(level_acc_t &acc,
   for (int k = tmin[2]; k < tmax[2]; ++k) {
     for (int j = tmin[1]; j < tmax[1]; ++j) {
       for (int i = tmin[0]; i < tmax[0]; ++i) {
-        if (mask && CCTK_REAL((*mask)(i, j, k)) < mask_below)
+        if (mask && CCTK_REAL((*mask)(i, j, k, mask_n)) < mask_below)
           continue;
 
         // Pass 1: norms
@@ -364,6 +373,11 @@ void reduce_level_box(level_acc_t &acc,
         const CCTK_REAL r = sqrt(sum(x * x));
         const CCTK_REAL floor = floor0 / std::max(r, CCTK_REAL(1));
         const CCTK_REAL ratio = fp16_half_ulp(absu) / std::max(D2, floor);
+        if (!(ratio == ratio)) {
+          // std::max would drop a NaN silently; count it instead
+          ++acc.nnan;
+          continue;
+        }
         acc.admiss = std::max(acc.admiss, ratio);
         if (fabs(r - shell_radius) < shell_halfwidth)
           acc.admiss_shell = std::max(acc.admiss_shell, ratio);
@@ -380,7 +394,8 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
                         const GHExt::PatchData::LevelData::GroupData &groupdata,
                         const MF &mfab, const int gi, const int vi,
                         const int tl, const MaskMF *const mask_mfab,
-                        const CCTK_REAL mask_below, const CCTK_REAL floor0,
+                        const int mask_n, const CCTK_REAL mask_below,
+                        const CCTK_REAL floor0,
                         const CCTK_REAL shell_radius,
                         const CCTK_REAL shell_halfwidth) {
   using SrcT = typename MF::value_type;
@@ -406,10 +421,15 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
   if (fine_level < int(patchdata.leveldata.size())) {
     const auto &restrict fine_leveldata = patchdata.leveldata.at(fine_level);
     const auto &restrict fine_groupdata = *fine_leveldata.groupdata.at(gi);
-    const MF &fine_mfab = std::get<MF>(*fine_groupdata.mfab.at(tl));
+    // Only the fine box array is needed, and every AnyMultiFab alternative
+    // provides it, so the fine level may hold another storage type than
+    // this one (per-level widths).
+    const amrex::BoxArray fine_ba = std::visit(
+        [](const auto &fine_mfab) { return fine_mfab.boxArray(); },
+        *fine_groupdata.mfab.at(tl));
     const amrex::IntVect reffact{2, 2, 2};
     finemask_imfab = std::make_unique<amrex::iMultiFab>(
-        makeFineMask(mfab, fine_mfab.boxArray(), reffact, geom.periodicity(),
+        makeFineMask(mfab, fine_ba, reffact, geom.periodicity(),
                      /*coarse value*/ 0, /* fine value */ 1));
   }
 
@@ -442,8 +462,9 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
         mask = std::make_unique<amrex::Array4<const MaskT> >(
             mask_mfab->array(mfi));
 
-      reduce_level_box<SrcT, MaskT>(local, vars, vi, mask.get(), mask_below,
-                                    tmin, tmax, finemask.get(), have_ghosts,
+      reduce_level_box<SrcT, MaskT>(local, vars, vi, mask.get(), mask_n,
+                                    mask_below, tmin, tmax, finemask.get(),
+                                    have_ghosts,
                                     x0, dx, floor0_l, shell_radius,
                                     shell_halfwidth);
     }
@@ -482,18 +503,29 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
     have_ghosts = have_ghosts && groupdata.nghostzones[0] >= 1 &&
                   groupdata.nghostzones[1] >= 1 && groupdata.nghostzones[2] >= 1;
 
-    warn_if_invalid(groupdata, vi, tl, make_valid_int(),
+    // The admissibility pass reads one point into the ghost and outer
+    // boundary layers, so those must be valid too when it runs.
+    warn_if_invalid(groupdata, vi, tl,
+                    have_ghosts ? make_valid_all() : make_valid_int(),
                     []() { return "Before per-level reduction"; });
 
     const GHExt::PatchData::LevelData::GroupData *mask_groupdata = nullptr;
     if (mask_gi >= 0) {
       mask_groupdata = leveldata.groupdata.at(mask_gi).get();
-      if (mask_groupdata->indextype != groupdata.indextype)
-        CCTK_VERROR("out_norm_mask_var %s has a different centering than the "
-                    "reduced group %s",
-                    CCTK_FullVarName(mask_vi), CCTK_FullGroupName(gi));
-      warn_if_invalid(*mask_groupdata, mask_vi0, tl, make_valid_int(),
-                      []() { return "Before per-level reduction (mask)"; });
+      if (mask_groupdata->indextype != groupdata.indextype) {
+        // A mask of another centering cannot be applied point by point;
+        // reduce this group unmasked and say so once per (group, level).
+        static std::set<std::pair<int, int> > warned;
+        if (warned.insert({gi, level}).second)
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                     "out_norm_mask_var %s has a different centering than "
+                     "group %s; level %d of that group is reduced unmasked",
+                     CCTK_FullVarName(mask_vi), CCTK_FullGroupName(gi), level);
+        mask_groupdata = nullptr;
+      } else {
+        warn_if_invalid(*mask_groupdata, mask_vi0, tl, make_valid_int(),
+                        []() { return "Before per-level reduction (mask)"; });
+      }
     }
 
     std::visit(
@@ -502,7 +534,7 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
           if (!mask_groupdata) {
             // No mask: pass a null pointer of the source type
             reduce_level_patch<MF, MF>(acc, patchdata, leveldata, groupdata,
-                                       mfab, gi, vi, tl, nullptr,
+                                       mfab, gi, vi, tl, nullptr, 0,
                                        out_norm_mask_below, floor0,
                                        out_norm_admiss_radius,
                                        out_norm_admiss_shell_halfwidth);
@@ -519,7 +551,7 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
                               level);
                 reduce_level_patch<MF, MaskMF>(
                     acc, patchdata, leveldata, groupdata, mfab, gi, vi, tl,
-                    &mask_mfab, out_norm_mask_below, floor0,
+                    &mask_mfab, mask_vi0, out_norm_mask_below, floor0,
                     out_norm_admiss_radius, out_norm_admiss_shell_halfwidth);
               },
               *mask_groupdata->mfab.at(tl));
@@ -529,11 +561,11 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
 
   // MPI reduction: plain arrays, no custom datatype
   CCTK_REAL sums[1] = {acc.sum2};
-  long long counts[2] = {acc.npoints, acc.nsubnormal16};
+  long long counts[3] = {acc.npoints, acc.nsubnormal16, acc.nnan};
   CCTK_REAL maxs[4] = {acc.maxabs, acc.max, acc.admiss, acc.admiss_shell};
   CCTK_REAL mins[1] = {acc.min};
   MPI_Allreduce(MPI_IN_PLACE, sums, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-  MPI_Allreduce(MPI_IN_PLACE, counts, 2, MPI_LONG_LONG, MPI_SUM,
+  MPI_Allreduce(MPI_IN_PLACE, counts, 3, MPI_LONG_LONG, MPI_SUM,
                 MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE, maxs, 4, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE, mins, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
@@ -548,6 +580,11 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
   red.admiss = maxs[2];
   red.admiss_shell = maxs[3];
   red.has_admiss = have_ghosts;
+  if (counts[2] > 0) {
+    // A NaN ratio means a NaN in the data or its ghosts; do not hide it
+    red.admiss = 0.0 / 0.0;
+    red.admiss_shell = 0.0 / 0.0;
+  }
   return red;
 }
 

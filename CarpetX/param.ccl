@@ -620,7 +620,7 @@ INT out_norm_per_level_every "Output per-level norms every that many iterations,
   1:* :: "every that many iterations"
 } -1
 
-STRING out_norm_mask_var "Full name of a grid function (e.g. CottonmouthZ4c4m::chi) whose points below out_norm_mask_below are excluded from the per-level norms; empty: no mask" STEERABLE=always
+STRING out_norm_mask_var "Full name of a grid function (e.g. CottonmouthZ4c4m::chi) whose points below out_norm_mask_below are excluded from the per-level norms; empty: no mask. Applies only to groups of the same centering as the mask; a group of another centering is reduced unmasked with a warning" STEERABLE=always
 {
   "" :: "no mask"
   ".*::.*" :: "a full variable name"
