@@ -6,11 +6,13 @@
 #include <cctk_Parameters.h>
 
 #include <AMReX_MultiFabUtil.H>
+#include <AMReX_Reduce.H>
 #include <AMReX_Orientation.H>
 
 #include <algorithm>
 #include <bitset>
 #include <cmath>
+#include <limits>
 #include <cstdlib>
 #include <memory>
 #include <variant>
@@ -280,8 +282,8 @@ reduction<CCTK_REAL, dim> reduce_typed(int gi, int vi, int tl) {
 
 namespace {
 
-// Thread-local accumulator; merged under a critical section (no custom
-// OpenMP reduction, unlike reduce_typed above).
+// Per-patch accumulator, merged across the patches of a level; the
+// per-box work is an AMReX ReduceOps reduction (reduce_level_patch).
 struct level_acc_t {
   CCTK_REAL sum2 = 0;
   CCTK_REAL maxabs = 0;
@@ -311,83 +313,31 @@ constexpr CCTK_REAL fp16_min_normal = 6.103515625e-5;
 
 // Half-ulp of binary16 at magnitude |u|: 2^(floor(log2 |u|) - 11) in the
 // normal range (10 fraction bits, so the ulp is 2^(e-10)), and half of the
-// subnormal spacing 2^-24 below it (also for u == 0).
-inline CCTK_REAL fp16_half_ulp(const CCTK_REAL absu) noexcept {
-  using std::ilogb, std::ldexp;
+// subnormal spacing 2^-24 below it (also for u == 0). Host and device: the
+// unqualified ilogb/ldexp are the C functions on the host and CUDA's device
+// builtins in a kernel.
+AMREX_GPU_HOST_DEVICE inline CCTK_REAL
+fp16_half_ulp(const CCTK_REAL absu) noexcept {
   if (!(absu >= fp16_min_normal))
     return ldexp(CCTK_REAL(1), -25);
   return ldexp(CCTK_REAL(1), ilogb(absu) - 11);
 }
 
-// One box: pass 1 (norms over the interior, mask applied) and pass 2 (the
-// admissibility ratio over the interior points not covered by a finer
-// level, mask applied). `vars` and `mask` are the full arrays including
-// ghost zones; [tmin, tmax) is the tile, a subset of the interior. Values
-// are read in the storage type SrcT and converted to CCTK_REAL once per
-// point; D2u is formed in SrcT (three loads, two subtractions in the
-// storage type's own arithmetic) and converted afterwards, so the ratio
-// judges the stored data, not a widened copy of it.
-template <typename SrcT, typename MaskT>
-void reduce_level_box(level_acc_t &acc,
-                      const amrex::Array4<const SrcT> &restrict vars,
-                      const int n, const amrex::Array4<const MaskT> *mask,
-                      const int mask_n, const CCTK_REAL mask_below,
-                      const vect<int, dim> &tmin,
-                      const vect<int, dim> &tmax,
-                      const amrex::Array4<const int> *restrict const finemask,
-                      const bool have_ghosts, const vect<CCTK_REAL, dim> &x0,
-                      const vect<CCTK_REAL, dim> &dx, const CCTK_REAL floor0,
-                      const CCTK_REAL shell_radius,
-                      const CCTK_REAL shell_halfwidth) {
-  using std::fabs, std::sqrt;
-  for (int k = tmin[2]; k < tmax[2]; ++k) {
-    for (int j = tmin[1]; j < tmax[1]; ++j) {
-      for (int i = tmin[0]; i < tmax[0]; ++i) {
-        if (mask && CCTK_REAL((*mask)(i, j, k, mask_n)) < mask_below)
-          continue;
-
-        // Pass 1: norms
-        const CCTK_REAL u = CCTK_REAL(vars(i, j, k, n));
-        const CCTK_REAL absu = fabs(u);
-        acc.sum2 += u * u;
-        acc.maxabs = std::max(acc.maxabs, absu);
-        acc.min = std::min(acc.min, u);
-        acc.max = std::max(acc.max, u);
-        ++acc.npoints;
-        if (absu > 0 && absu < fp16_min_normal)
-          ++acc.nsubnormal16;
-
-        // Pass 2: admissibility, fine-masked
-        if (!have_ghosts)
-          continue;
-        if (finemask && (*finemask)(i, j, k))
-          continue;
-        const SrcT u0 = vars(i, j, k, n);
-        const SrcT d2x = (vars(i + 1, j, k, n) - u0) - (u0 - vars(i - 1, j, k, n));
-        const SrcT d2y = (vars(i, j + 1, k, n) - u0) - (u0 - vars(i, j - 1, k, n));
-        const SrcT d2z = (vars(i, j, k + 1, n) - u0) - (u0 - vars(i, j, k - 1, n));
-        const CCTK_REAL D2 = std::max(
-            {fabs(CCTK_REAL(d2x)), fabs(CCTK_REAL(d2y)), fabs(CCTK_REAL(d2z))});
-        const vect<int, dim> ipos = {i, j, k};
-        const vect<CCTK_REAL, dim> x = x0 + ipos * dx;
-        const CCTK_REAL r = sqrt(sum(x * x));
-        const CCTK_REAL floor = floor0 / std::max(r, CCTK_REAL(1));
-        const CCTK_REAL ratio = fp16_half_ulp(absu) / std::max(D2, floor);
-        if (!(ratio == ratio)) {
-          // std::max would drop a NaN silently; count it instead
-          ++acc.nnan;
-          continue;
-        }
-        acc.admiss = std::max(acc.admiss, ratio);
-        if (fabs(r - shell_radius) < shell_halfwidth)
-          acc.admiss_shell = std::max(acc.admiss_shell, ratio);
-      }
-    }
-  }
-}
-
 // One level of one patch, over every box, for a given source and mask
-// storage type (both dispatched through std::visit on AnyMultiFab).
+// storage type (both dispatched through std::visit on AnyMultiFab). The
+// reduction is an AMReX ReduceOps evaluation per box: on a GPU build it
+// runs on the device where the data lives (the first version walked the
+// managed arrays in host loops and took 14 s per call at 128^3, which
+// dominated the physics harness), on a CPU build it runs on the host.
+//
+// Per point: pass 1 (norms over the interior, mask applied) and pass 2
+// (the admissibility ratio over the interior points not covered by a finer
+// level, mask applied). Values are read in the storage type SrcT and
+// converted to CCTK_REAL once per point; D2u is formed in SrcT (three
+// loads, two subtractions in the storage type's own arithmetic) and
+// converted afterwards, so the ratio judges the stored data, not a widened
+// copy of it. A point that is masked out contributes the neutral element
+// of every operation.
 template <typename MF, typename MaskMF>
 void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
                         const GHExt::PatchData::LevelData &leveldata,
@@ -410,7 +360,7 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
   const vect<CCTK_REAL, dim> x0v = {x01[0], x01[1], x01[2]};
   const auto x0 = x0v + indextype * dx / 2;
   // floor(l, x) = amplitude * (radius / max(|x|, 1)) * dx_l^2; the
-  // radius-dependent factor is applied per point in reduce_level_box.
+  // radius-dependent factor is applied per point below.
   const CCTK_REAL floor0_l = floor0 * dx[0] * dx[0];
 
   std::unique_ptr<amrex::iMultiFab> finemask_imfab;
@@ -430,44 +380,125 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
                      /*coarse value*/ 0, /* fine value */ 1));
   }
 
-  auto mfitinfo = amrex::MFItInfo().SetDynamic(true).EnableTiling();
-#pragma omp parallel
-  {
-    level_acc_t local;
-    for (amrex::MFIter mfi(mfab, mfitinfo); mfi.isValid(); ++mfi) {
-      const amrex::Box &bx = mfi.tilebox(); // current tile (without ghosts)
-      const vect<int, dim> tmin{bx.smallEnd(0), bx.smallEnd(1), bx.smallEnd(2)};
-      const vect<int, dim> tmax{bx.bigEnd(0) + 1, bx.bigEnd(1) + 1,
-                                bx.bigEnd(2) + 1};
+  // sum2, maxabs, min, max, npoints, nsubnormal16, admiss, admiss_shell, nnan
+  amrex::ReduceOps<amrex::ReduceOpSum, amrex::ReduceOpMax, amrex::ReduceOpMin,
+                   amrex::ReduceOpMax, amrex::ReduceOpSum, amrex::ReduceOpSum,
+                   amrex::ReduceOpMax, amrex::ReduceOpMax, amrex::ReduceOpSum>
+      reduce_op;
+  amrex::ReduceData<CCTK_REAL, CCTK_REAL, CCTK_REAL, CCTK_REAL, amrex::Long,
+                    amrex::Long, CCTK_REAL, CCTK_REAL, amrex::Long>
+      reduce_data(reduce_op);
+  using ReduceTuple = typename decltype(reduce_data)::Type;
 
-      const amrex::Array4<const SrcT> &vars = mfab.array(mfi);
+  // Everything the per-point lambda reads is captured by value as plain
+  // scalars, so the same lambda compiles as a device kernel.
+  const CCTK_REAL inf = std::numeric_limits<CCTK_REAL>::infinity();
+  const CCTK_REAL fp16_min_normal_l = fp16_min_normal;
+  const CCTK_REAL x00 = x0[0], x01_ = x0[1], x02 = x0[2];
+  const CCTK_REAL dx0 = dx[0], dx1_ = dx[1], dx2 = dx[2];
+  const int n = vi;
+  const bool have_mask = mask_mfab != nullptr;
+  const bool have_fine = bool(finemask_imfab);
 
-      std::unique_ptr<amrex::Array4<const int> > finemask;
-      if (finemask_imfab) {
-        finemask = std::make_unique<amrex::Array4<const int> >(
-            finemask_imfab->array(mfi));
-        assert(finemask->begin.x == vars.begin.x);
-        assert(finemask->begin.y == vars.begin.y);
-        assert(finemask->begin.z == vars.begin.z);
-        assert(finemask->end.x == vars.end.x);
-        assert(finemask->end.y == vars.end.y);
-        assert(finemask->end.z == vars.end.z);
-      }
-
-      std::unique_ptr<amrex::Array4<const MaskT> > mask;
-      if (mask_mfab)
-        mask = std::make_unique<amrex::Array4<const MaskT> >(
-            mask_mfab->array(mfi));
-
-      reduce_level_box<SrcT, MaskT>(local, vars, vi, mask.get(), mask_n,
-                                    mask_below, tmin, tmax, finemask.get(),
-                                    have_ghosts,
-                                    x0, dx, floor0_l, shell_radius,
-                                    shell_halfwidth);
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+  for (amrex::MFIter mfi(mfab, amrex::TilingIfNotGPU()); mfi.isValid();
+       ++mfi) {
+    const amrex::Box &bx = mfi.tilebox(); // current tile (without ghosts)
+    const amrex::Array4<const SrcT> vars = mfab.const_array(mfi);
+    const amrex::Array4<const MaskT> mask =
+        have_mask ? mask_mfab->const_array(mfi) : amrex::Array4<const MaskT>{};
+    const amrex::Array4<const int> finemask =
+        have_fine ? finemask_imfab->const_array(mfi)
+                  : amrex::Array4<const int>{};
+    if (have_fine) {
+      assert(finemask.begin.x == vars.begin.x);
+      assert(finemask.begin.y == vars.begin.y);
+      assert(finemask.begin.z == vars.begin.z);
+      assert(finemask.end.x == vars.end.x);
+      assert(finemask.end.y == vars.end.y);
+      assert(finemask.end.z == vars.end.z);
     }
-#pragma omp critical(CarpetX_reduce_level)
-    acc.merge(local);
+
+    reduce_op.eval(
+        bx, reduce_data,
+        [=] AMREX_GPU_DEVICE(int i, int j, int k) -> ReduceTuple {
+          using std::fabs, std::sqrt;
+          if (have_mask && CCTK_REAL(mask(i, j, k, mask_n)) < mask_below)
+            return {CCTK_REAL(0), CCTK_REAL(0), +inf, -inf, amrex::Long(0),
+                    amrex::Long(0), -inf, -inf, amrex::Long(0)};
+
+          // Pass 1: norms
+          const CCTK_REAL u = CCTK_REAL(vars(i, j, k, n));
+          const CCTK_REAL absu = fabs(u);
+          const amrex::Long nsub =
+              (absu > 0 && absu < fp16_min_normal_l) ? 1 : 0;
+
+          // Pass 2: admissibility, fine-masked
+          CCTK_REAL admiss = -inf, admiss_shell = -inf;
+          amrex::Long nnan = 0;
+          if (have_ghosts && !(have_fine && finemask(i, j, k))) {
+            const SrcT u0 = vars(i, j, k, n);
+            const SrcT d2x =
+                (vars(i + 1, j, k, n) - u0) - (u0 - vars(i - 1, j, k, n));
+            const SrcT d2y =
+                (vars(i, j + 1, k, n) - u0) - (u0 - vars(i, j - 1, k, n));
+            const SrcT d2z =
+                (vars(i, j, k + 1, n) - u0) - (u0 - vars(i, j, k - 1, n));
+            const CCTK_REAL D2 =
+                fmax(fmax(fabs(CCTK_REAL(d2x)), fabs(CCTK_REAL(d2y))),
+                     fabs(CCTK_REAL(d2z)));
+            const CCTK_REAL x = x00 + i * dx0;
+            const CCTK_REAL y = x01_ + j * dx1_;
+            const CCTK_REAL z = x02 + k * dx2;
+            const CCTK_REAL r = sqrt(x * x + y * y + z * z);
+            const CCTK_REAL floor = floor0_l / fmax(r, CCTK_REAL(1));
+            const CCTK_REAL ratio = fp16_half_ulp(absu) / fmax(D2, floor);
+            if (!(ratio == ratio)) {
+              // fmax would drop a NaN silently; count it instead
+              nnan = 1;
+            } else {
+              admiss = ratio;
+              if (fabs(r - shell_radius) < shell_halfwidth)
+                admiss_shell = ratio;
+            }
+          }
+          return {u * u, absu, u, u, amrex::Long(1), nsub, admiss,
+                  admiss_shell, nnan};
+        });
   }
+
+  const ReduceTuple hv = reduce_data.value(reduce_op);
+  level_acc_t local;
+  local.sum2 = amrex::get<0>(hv);
+  local.maxabs = amrex::get<1>(hv);
+  local.min = amrex::get<2>(hv);
+  local.max = amrex::get<3>(hv);
+  local.npoints = amrex::get<4>(hv);
+  local.nsubnormal16 = amrex::get<5>(hv);
+  local.admiss = amrex::get<6>(hv);
+  local.admiss_shell = amrex::get<7>(hv);
+  local.nnan = amrex::get<8>(hv);
+  // ReduceOpMax/Min start from numeric_limits lowest()/max(), not from
+  // the infinities level_acc_t and the writer use for "no point", so a
+  // reduction that saw no contributing point comes back as the sentinel.
+  const CCTK_REAL lowest = std::numeric_limits<CCTK_REAL>::lowest();
+  const CCTK_REAL highest = std::numeric_limits<CCTK_REAL>::max();
+  if (local.npoints == 0) {
+    local.maxabs = 0;
+    local.min = +inf;
+    local.max = -inf;
+  }
+  if (local.min == highest)
+    local.min = +inf;
+  if (local.max == lowest)
+    local.max = -inf;
+  if (local.admiss == lowest)
+    local.admiss = -inf;
+  if (local.admiss_shell == lowest)
+    local.admiss_shell = -inf;
+  acc.merge(local);
 }
 
 } // namespace
