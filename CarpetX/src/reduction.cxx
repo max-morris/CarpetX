@@ -2,6 +2,7 @@
 #include "mpi_types.hxx"
 #include "reduction.hxx"
 #include "schedule.hxx"
+#include "timer.hxx"
 
 #include <cctk_Parameters.h>
 
@@ -363,9 +364,17 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
   // radius-dependent factor is applied per point below.
   const CCTK_REAL floor0_l = floor0 * dx[0] * dx[0];
 
+  // Sub-timers (TimerReport / NVTX): where a call spends its time. The
+  // first device version cost about 25 ms per (variable, level) on an
+  // A100 with kernels of 150 us, so the cost is around the kernels.
+  static Timer timer_finemask("OutputNormsPerLevel::finemask");
+  static Timer timer_reduce("OutputNormsPerLevel::reduce");
+  static Timer timer_readback("OutputNormsPerLevel::readback");
+
   std::unique_ptr<amrex::iMultiFab> finemask_imfab;
   const int fine_level = leveldata.level + 1;
   if (fine_level < int(patchdata.leveldata.size())) {
+    Interval interval_finemask(timer_finemask);
     const auto &restrict fine_leveldata = patchdata.leveldata.at(fine_level);
     const auto &restrict fine_groupdata = *fine_leveldata.groupdata.at(gi);
     // Only the fine box array is needed, and every AnyMultiFab alternative
@@ -400,6 +409,7 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
   const bool have_mask = mask_mfab != nullptr;
   const bool have_fine = bool(finemask_imfab);
 
+  timer_reduce.start();
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
@@ -469,7 +479,10 @@ void reduce_level_patch(level_acc_t &acc, const GHExt::PatchData &patchdata,
         });
   }
 
+  timer_reduce.stop();
+  timer_readback.start();
   const ReduceTuple hv = reduce_data.value(reduce_op);
+  timer_readback.stop();
   level_acc_t local;
   local.sum2 = amrex::get<0>(hv);
   local.maxabs = amrex::get<1>(hv);
@@ -601,6 +614,8 @@ level_reduction_t reduce_level(const int gi, const int vi, const int tl,
   }
 
   // MPI reduction: plain arrays, no custom datatype
+  static Timer timer_mpi("OutputNormsPerLevel::allreduce");
+  Interval interval_mpi(timer_mpi);
   CCTK_REAL sums[1] = {acc.sum2};
   long long counts[3] = {acc.npoints, acc.nsubnormal16, acc.nnan};
   CCTK_REAL maxs[4] = {acc.maxabs, acc.max, acc.admiss, acc.admiss_shell};
