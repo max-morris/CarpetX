@@ -33,6 +33,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <iomanip>
 #include <limits>
 #include <mutex>
@@ -177,15 +178,27 @@ void OutputNormsPerLevel(const cGH *restrict cctkGH) {
 
       const std::string filename = group_filename(out_dir, level, gi);
 
-      std::ofstream file;
+      // One stream per file, kept open for the run: opening, appending
+      // and closing the file on every call cost about 65 ms per (group,
+      // level) on athena's NFS home (a close there is a synchronous
+      // commit), which was most of the output's time at 96^3. The stream
+      // is flushed after each row, so the file is readable while the run
+      // is on and complete if the run dies.
+      static std::map<std::string, std::ofstream> files;
       output_file_description_t ofd;
+      bool file_is_new = false;
       if (is_root) {
-        // Header when the group set changed or the file is new (a level
-        // created by a later regrid gets its own header)
-        const bool file_exists = std::ifstream(filename).good();
-        file.open(filename, std::ios_base::app);
+        if (!files.count(filename)) {
+          // Header when the group set changed or the file is new (a level
+          // created by a later regrid gets its own header)
+          file_is_new = !std::ifstream(filename).good();
+          files[filename].open(filename, std::ios_base::app);
+        }
+      }
+      std::ofstream &file = files[filename];
+      if (is_root) {
         ofd.filename = filename;
-        if (group_enabled_changed || !file_exists) {
+        if (group_enabled_changed || file_is_new) {
           int col = 0;
           file << "# " << ++col << ":iteration";
           file << sep << ++col << ":time";
@@ -221,7 +234,7 @@ void OutputNormsPerLevel(const cGH *restrict cctkGH) {
 
       if (is_root) {
         file << "\n";
-        file.close();
+        file.flush();
 
         ofd.description = "CarpetX per-level TSV norms output";
         ofd.writer_thorn = CCTK_THORNSTRING;
