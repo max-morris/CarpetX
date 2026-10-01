@@ -1,3 +1,6 @@
+#ifndef CARPETX_PROLONGATE_3D_RF2_IMPL_HERMITE_HXX
+#define CARPETX_PROLONGATE_3D_RF2_IMPL_HERMITE_HXX
+
 #include "prolongate_3d_rf2_impl.hxx"
 
 namespace CarpetX {
@@ -99,13 +102,7 @@ const std::map<int, std::array<InterpolaterT<T> *, 8> > &prolongate_hermite_3d_r
   return table;
 }
 
-template const std::map<int, std::array<InterpolaterT<CCTK_REAL> *, 8> > &
-prolongate_hermite_3d_rf2_table<CCTK_REAL>();
-template const std::map<int, std::array<InterpolaterT<CCTK_REAL4> *, 8> > &
-prolongate_hermite_3d_rf2_table<CCTK_REAL4>();
-#ifdef HAVE_CCTK_REAL2
-template const std::map<int, std::array<InterpolaterT<CCTK_REAL2> *, 8> > &
-prolongate_hermite_3d_rf2_table<CCTK_REAL2>();
-#endif
 
 } // namespace CarpetX
+
+#endif // #ifndef CARPETX_PROLONGATE_3D_RF2_IMPL_HERMITE_HXX
