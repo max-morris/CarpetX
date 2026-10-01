@@ -31,7 +31,7 @@ constexpr int maxncomps = 16;
 template <int NI, int NJ, int NK>
 void BoundaryCondition::apply_on_face() const {
   constexpr Arith::vect<int, dim> inormal{NI, NJ, NK};
-  static_assert(!all(inormal == 0));
+  static_assert(!(NI == 0 && NJ == 0 && NK == 0));
 
   using std::max, std::min;
   Arith::vect<int, dim> bmin, bmax;
@@ -191,7 +191,7 @@ void BoundaryCondition::apply_on_face_symbcxyz(
     const Arith::vect<int, dim> &bmin,
     const Arith::vect<int, dim> &bmax) const {
   constexpr Arith::vect<int, dim> inormal{NI, NJ, NK};
-  static_assert(!all(inormal == 0));
+  static_assert(!(NI == 0 && NJ == 0 && NK == 0));
   constexpr Arith::vect<boundary_t, dim> boundaries{BCI, BCJ, BCK};
   constexpr Arith::vect<symmetry_t, dim> symmetries{SCI, SCJ, SCK};
 
@@ -206,7 +206,8 @@ void BoundaryCondition::apply_on_face_symbcxyz(
   const int cmax = ncomps;
 
   // Periodic symmetries should have been translated to `none`
-  static_assert(!any(symmetries == symmetry_t::periodic));
+  static_assert(SCI != symmetry_t::periodic && SCJ != symmetry_t::periodic &&
+                SCK != symmetry_t::periodic);
 
   if constexpr (all(symmetries == symmetry_t::none &&
                     boundaries == boundary_t::none)) {
