@@ -16,6 +16,7 @@
 #include <AMReX_FluxRegister.H>
 #include <AMReX_Interpolater.H>
 #include <AMReX_MultiFab.H>
+#include <AMReX_TypeTraits.H>
 
 #include <yaml-cpp/yaml.h>
 
@@ -29,6 +30,21 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
+
+#ifdef HAVE_CCTK_REAL2
+namespace amrex {
+// AMReX's FillBoundary and ParallelCopy take their plain copy path only
+// for a thread-safe copy or a value type whose store is atomic, and
+// IsStoreAtomic (AMReX_TypeTraits.H) is true only for std::is_arithmetic
+// types of at most 8 bytes, which a binary16 type is not. Nodal box
+// arrays are never thread-safe (neighboring boxes share faces), so every
+// vertex-, edge- or face-centered CCTK_REAL2 group went down the masked
+// atomic path: a mask-clear kernel, masked copies and a masked
+// ParallelCopy, 2.7x the plain path (nsys, qbd and athena, 2026-09-29).
+// A 2-byte aligned store cannot tear, which is all the trait promises.
+template <> struct IsStoreAtomic<CCTK_REAL2> : std::true_type {};
+} // namespace amrex
+#endif
 
 namespace CarpetX {
 using namespace Arith;
@@ -116,6 +132,7 @@ public:
 // float), so we define our own here.
 using hMultiFab = amrex::FabArray<amrex::BaseFab<CCTK_REAL2> >;
 #endif
+
 
 // Storage for a grid function group's data, at the precision (CCTK_REAL,
 // CCTK_REAL4, or CCTK_REAL2) determined by the group's `vartype`

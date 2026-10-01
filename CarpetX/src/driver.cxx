@@ -2095,7 +2095,11 @@ void *SetupGH(tFleshConfig *fc, int convLevel, cGH *restrict cctkGH) {
       "fabarray.mfiter_tile_size",
       std::vector<int>{max_tile_size_x, max_tile_size_y, max_tile_size_z});
 
+  // amrex::Initialize treats argv[0] as the program name and reads
+  // ParmParse entries from argv[1] on, so the first amrex_parameters
+  // entry was silently dropped (2026-09-29). A program name goes first.
   std::vector<char *> args;
+  args.push_back(strdup("cactus"));
   for (std::size_t n = 0; n < 100; ++n)
     if (amrex_parameters[n][0])
       args.push_back(strdup(amrex_parameters[n]));
