@@ -2142,15 +2142,20 @@ int CallFunction(void *function, cFunctionData *restrict attribute,
 
   const mode_t mode = decode_mode(attribute);
   switch (mode) {
-  case mode_t::local:
+  case mode_t::local: {
     // Call function once per tile
-    active_levels->loop_parallel([&](int patch, int level, int index,
-                                     int component, const cGH *local_cctkGH) {
+    const auto call_on_tile = [&](int patch, int level, int index,
+                                  int component, const cGH *local_cctkGH) {
       update_cctkGH(const_cast<cGH *>(local_cctkGH), cctkGH);
       CCTK_CallFunction(function, attribute, const_cast<cGH *>(local_cctkGH));
-    });
+    };
+    if (CCTK_EQUALS(kernel_launch_method, "serial"))
+      active_levels->loop_serially(call_on_tile);
+    else
+      active_levels->loop_parallel(call_on_tile);
     synchronize();
     break;
+  }
 
   case mode_t::meta:
   case mode_t::global:
